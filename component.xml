@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+           xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/moqui-conf-3.xsd"
+           name="moqui-adk" version="1.0.0">
+
+    <entity-factory load-path="entity/"/>
+    <service-factory load-path="service/"/>
+    <screen-factory load-path="screen/"/>
+
+    <entity-factory load-data="data/AdkSecuritySeedData.xml"/>
+
+    <webapp-list>
+        <webapp name="webroot">
+            <servlet name="AdkServlet" class="org.moqui.adk.AdkServlet"
+                     load-on-startup="6" async-supported="true">
+                <init-param name="keepAliveIntervalSeconds" value="30"/>
+                <init-param name="adkWebPort" value="8090"/>
+                <url-pattern>/adk/*</url-pattern>
+            </servlet>
+        </webapp>
+    </webapp-list>
+
+</component>

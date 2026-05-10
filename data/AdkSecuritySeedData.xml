@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<entity-facade-xml type="seed">
+
+    <!-- User group for ADK web UI access -->
+    <moqui.security.UserGroup userGroupId="AdkUsers" description="ADK Web UI Users"/>
+
+    <!-- Artifact group for ADK API endpoints -->
+    <moqui.security.ArtifactGroup artifactGroupId="ADK_ACCESS" description="ADK API Access"/>
+
+    <!-- Allow AdkUsers to hit /adk/api/* -->
+    <moqui.security.ArtifactGroupMember artifactGroupId="ADK_ACCESS"
+        artifactName="adk/api" artifactTypeEnumId="AT_REST_PATH" nameIsPattern="Y"/>
+
+    <moqui.security.UserGroupArtifactGroup userGroupId="AdkUsers"
+        artifactGroupId="ADK_ACCESS" authzActionEnumId="AUTHZA_ALL"
+        authzTypeEnumId="AUTHZT_ALWAYS"/>
+
+    <!-- Allow ADMIN group full ADK access -->
+    <moqui.security.UserGroupArtifactGroup userGroupId="ADMIN"
+        artifactGroupId="ADK_ACCESS" authzActionEnumId="AUTHZA_ALL"
+        authzTypeEnumId="AUTHZT_ALWAYS"/>
+
+</entity-facade-xml>

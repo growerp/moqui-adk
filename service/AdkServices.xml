@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
+
+    <service verb="update" noun="AgentConfig">
+        <description>Create or update ADK agent configuration. Disables all existing configs first.</description>
+        <in-parameters>
+            <parameter name="agentName" required="true"/>
+            <parameter name="modelName" required="true"/>
+            <parameter name="apiKey"/>
+            <parameter name="systemPrompt"/>
+        </in-parameters>
+        <actions>
+            <script><![CDATA[
+                // Disable any existing active config
+                ec.entity.find("moqui.adk.AdkAgentConfig").condition("enabled", "Y").list().each {
+                    it.set("enabled", "N").store()
+                }
+
+                // Find or create config record
+                def existing = ec.entity.find("moqui.adk.AdkAgentConfig").condition("agentName", agentName).one()
+                if (existing) {
+                    existing.set("modelName", modelName)
+                    existing.set("systemPrompt", systemPrompt)
+                    existing.set("enabled", "Y")
+                    if (apiKey) existing.set("apiKey", apiKey)
+                    existing.store()
+                } else {
+                    ec.entity.makeValue("moqui.adk.AdkAgentConfig")
+                        .set("adkAgentConfigId", ec.entity.sequencedIdPrimary)
+                        .set("agentName", agentName)
+                        .set("modelName", modelName)
+                        .set("apiKey", apiKey ?: "")
+                        .set("systemPrompt", systemPrompt ?: "You are a helpful assistant for the GrowERP system.")
+                        .set("enabled", "Y")
+                        .create()
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+</services>

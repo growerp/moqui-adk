@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<screen xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/xml-screen-3.xsd"
+        default-menu-index="1" menu-image="fa fa-dashboard" menu-image-type="icon"
+        default-menu-title="Dashboard">
+
+    <actions>
+        <script><![CDATA[
+            adkWebPort = ec.factory.getProperty("adk.web.port") ?: "8090"
+            adkReady = false
+            try {
+                def conn = new URL("http://localhost:${adkWebPort}/").openConnection()
+                conn.connectTimeout = 1000
+                conn.connect()
+                adkReady = conn.responseCode < 500
+            } catch (Exception e) {
+                adkReady = false
+            }
+            configValue = ec.entity.find("moqui.adk.AdkAgentConfig").condition("enabled", "Y").list().first
+            sessionCount = ec.entity.find("moqui.adk.AdkSession").count()
+        ]]></script>
+    </actions>
+
+    <widgets>
+        <container-row>
+            <row-col lg="6" md="12">
+                <container-box>
+                    <box-header title="ADK Status"/>
+                    <box-body>
+                        <label text="Agent: ${configValue?.agentName ?: 'Not configured'}" type="p"/>
+                        <label text="Model: ${configValue?.modelName ?: 'Not configured'}" type="p"/>
+                        <label text="Web UI Port: ${adkWebPort}" type="p"/>
+                        <label text="Web UI Status: ${adkReady ? 'Running' : 'Starting...'}" type="p"
+                               style="${adkReady ? 'color:green' : 'color:orange'}"/>
+                        <label text="Active Sessions: ${sessionCount}" type="p"/>
+                    </box-body>
+                    <box-toolbar>
+                        <link url="../ChatUI" text="Open Chat UI" btn-type="primary"/>
+                        <link url="../Configuration" text="Configure" btn-type="default"/>
+                    </box-toolbar>
+                </container-box>
+            </row-col>
+            <row-col lg="6" md="12">
+                <container-box>
+                    <box-header title="Quick Links"/>
+                    <box-body>
+                        <link url="../ChatUI" text="Chat UI" type="anchor"/>
+                        <link url="../Configuration" text="Agent Configuration" type="anchor"/>
+                    </box-body>
+                </container-box>
+            </row-col>
+        </container-row>
+    </widgets>
+</screen>
