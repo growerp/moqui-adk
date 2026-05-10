@@ -62,26 +62,39 @@
         <render-mode>
             <text type="vuet"><![CDATA[
                 <style>
-                #adk-chat{display:flex;flex-direction:column;height:calc(100vh - 150px);padding:12px;gap:8px;box-sizing:border-box}
-                #adk-msgs{flex:1;overflow-y:auto;border:1px solid #dee2e6;border-radius:6px;padding:12px;background:#f8f9fa}
-                .adk-m{margin:6px 0;padding:8px 12px;border-radius:12px;max-width:72%;word-wrap:break-word;line-height:1.5}
-                .adk-u{margin-left:auto;background:#3c8dbc;color:#fff;text-align:right}
-                .adk-a{background:#fff;border:1px solid #dee2e6;color:#333;white-space:pre-wrap}
-                .adk-e{background:#f8d7da;color:#721c24;border:1px solid #f5c6cb;max-width:100%}
-                #adk-row{display:flex;gap:8px}
-                #adk-in{flex:1;padding:8px 12px;border:1px solid #ccc;border-radius:4px;font-size:14px}
-                #adk-btn{padding:8px 20px;background:#3c8dbc;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:14px}
-                #adk-btn:disabled{background:#aaa;cursor:default}
-                #adk-st{font-size:12px;color:#6c757d}
+                #adk-panel{display:flex;flex-direction:column;height:calc(100vh - 200px);min-height:420px;margin:0;border-radius:6px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.15)}
+                #adk-head{background:#3c8dbc;color:#fff;padding:10px 15px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+                #adk-head h4{margin:0;font-size:15px;font-weight:600}
+                #adk-st{font-size:12px;opacity:.85;background:rgba(255,255,255,.2);padding:2px 8px;border-radius:10px}
+                #adk-msgs{flex:1;overflow-y:auto;padding:16px;background:#f4f6f8;display:flex;flex-direction:column;gap:10px}
+                .adk-row-u{display:flex;justify-content:flex-end}
+                .adk-row-a{display:flex;justify-content:flex-start;align-items:flex-start;gap:8px}
+                .adk-avatar{width:32px;height:32px;border-radius:50%;background:#3c8dbc;color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0}
+                .adk-bubble{max-width:72%;padding:10px 14px;border-radius:18px;word-wrap:break-word;line-height:1.55;font-size:14px}
+                .adk-bubble-u{background:#3c8dbc;color:#fff;border-bottom-right-radius:4px}
+                .adk-bubble-a{background:#fff;color:#333;border:1px solid #dde3e8;border-bottom-left-radius:4px;white-space:pre-wrap}
+                .adk-bubble-e{background:#fdf2f2;color:#c0392b;border:1px solid #f5c6cb;border-radius:8px;max-width:100%;font-size:13px}
+                #adk-foot{padding:12px 15px;background:#fff;border-top:1px solid #e0e0e0;flex-shrink:0}
                 </style>
-                <div id="adk-chat">
-                    <div id="adk-msgs"></div>
-                    <div id="adk-row">
-                        <input id="adk-in" type="text" placeholder="Type a message and press Enter…"
-                               onkeydown="if(event.key==='Enter'&amp;&amp;!event.shiftKey){event.preventDefault();adkSend();}"/>
-                        <button id="adk-btn" onclick="adkSend()">Send</button>
+
+                <div id="adk-panel">
+                    <div id="adk-head">
+                        <h4><i class="fa fa-comments" style="margin-right:7px"></i>ADK Agent</h4>
+                        <span id="adk-st">Connecting…</span>
                     </div>
-                    <div id="adk-st">Connecting…</div>
+                    <div id="adk-msgs"></div>
+                    <div id="adk-foot">
+                        <div class="input-group">
+                            <input id="adk-in" type="text" class="form-control"
+                                   placeholder="Type a message and press Enter…"
+                                   onkeydown="if(event.key==='Enter'&amp;&amp;!event.shiftKey){event.preventDefault();adkSend();}"/>
+                            <span class="input-group-btn">
+                                <button id="adk-btn" class="btn btn-primary" onclick="adkSend()">
+                                    <i class="fa fa-paper-plane"></i> Send
+                                </button>
+                            </span>
+                        </div>
+                    </div>
                 </div>
                 <script>
                 (function(){
@@ -95,39 +108,65 @@
                         return {'Content-Type':'application/json','Accept':'application/json','X-CSRF-Token': t ? t.value : ''};
                     }
 
-                    function st(m){ document.getElementById('adk-st').textContent = m; }
-                    function addMsg(cls, txt){
-                        var d = document.createElement('div');
-                        d.className = 'adk-m ' + cls; d.textContent = txt;
+                    function st(m){
+                        var el = document.getElementById('adk-st');
+                        if(el) el.textContent = m;
+                    }
+                    function addMsg(type, txt){
                         var c = document.getElementById('adk-msgs');
-                        c.appendChild(d); c.scrollTop = c.scrollHeight;
-                        return d;
+                        var row = document.createElement('div');
+                        if(type === 'u'){
+                            row.className = 'adk-row-u';
+                            var b = document.createElement('div');
+                            b.className = 'adk-bubble adk-bubble-u';
+                            b.textContent = txt;
+                            row.appendChild(b);
+                        } else if(type === 'e'){
+                            row.className = 'adk-row-a';
+                            var b = document.createElement('div');
+                            b.className = 'adk-bubble adk-bubble-e';
+                            b.textContent = txt;
+                            row.appendChild(b);
+                        } else {
+                            row.className = 'adk-row-a';
+                            var av = document.createElement('div');
+                            av.className = 'adk-avatar';
+                            av.innerHTML = '<i class="fa fa-robot"></i>';
+                            var b = document.createElement('div');
+                            b.className = 'adk-bubble adk-bubble-a';
+                            b.textContent = txt;
+                            row.appendChild(av);
+                            row.appendChild(b);
+                        }
+                        c.appendChild(row);
+                        c.scrollTop = c.scrollHeight;
+                        return b;
                     }
 
                     fetch(CREATE_URL, {method:'POST', headers:headers(), body:'{}'})
                     .then(function(r){ return r.json(); })
                     .then(function(d){
                         if(d.sessionId){ SID = d.sessionId; st('Ready'); }
-                        else { st('Config error — set API key in Configuration'); addMsg('adk-e', d.errorMessage || 'Failed to create session'); }
+                        else { st('Config error — set API key in Configuration'); addMsg('e', d.errorMessage || 'Failed to create session'); }
                     })
-                    .catch(function(e){ st('Cannot connect'); addMsg('adk-e', 'Error: ' + e); });
+                    .catch(function(e){ st('Cannot connect'); addMsg('e', 'Error: ' + e); });
 
                     window.adkSend = function(){
                         if(BUSY || !SID) return;
                         var inp = document.getElementById('adk-in'), txt = inp.value.trim();
                         if(!txt) return;
                         inp.value = ''; BUSY = true; document.getElementById('adk-btn').disabled = true;
-                        addMsg('adk-u', txt);
-                        var thinking = addMsg('adk-a', '…');
+                        addMsg('u', txt);
+                        var thinking = addMsg('a', '…');
                         st('Thinking…');
                         fetch(RUN_URL, {method:'POST', headers:headers(),
                             body: JSON.stringify({sessionId: SID, message: txt})})
                         .then(function(r){ return r.json(); })
                         .then(function(d){
                             if(d.response !== undefined){ thinking.textContent = d.response || '(no response)'; st('Ready'); }
-                            else { thinking.textContent = d.errorMessage || 'Unknown error'; thinking.className = 'adk-m adk-e'; st('Error'); }
+                            else { thinking.textContent = d.errorMessage || 'Unknown error'; thinking.className = 'adk-bubble adk-bubble-e'; st('Error'); }
                         })
-                        .catch(function(e){ thinking.textContent = 'Error: ' + e; thinking.className = 'adk-m adk-e'; st('Error'); })
+                        .catch(function(e){ thinking.textContent = 'Error: ' + e; thinking.className = 'adk-bubble adk-bubble-e'; st('Error'); })
                         .finally(function(){ BUSY = false; document.getElementById('adk-btn').disabled = false; });
                     };
                 })();
