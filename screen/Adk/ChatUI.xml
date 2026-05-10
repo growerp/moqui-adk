@@ -4,9 +4,23 @@
         default-menu-title="Chat UI" menu-image="fa fa-comments" menu-image-type="icon"
         default-menu-index="2" require-authentication="true">
 
+    <actions>
+        <script><![CDATA[
+            configValue = ec.entity.find("moqui.adk.AdkAgentConfig").condition("enabled", "Y").one()
+            adkServerUrl = configValue?.adkServerUrl ?: "http://localhost:8090"
+            adkChatUrl = adkServerUrl + "/dev-ui"
+        ]]></script>
+    </actions>
+
     <widgets>
         <render-mode>
-            <text type="html" location="component://moqui-adk/screen/Adk/ChatUI.html.ftl"/>
+            <text type="html"><![CDATA[
+                <iframe src="${adkChatUrl}"
+                        style="width:100%;height:calc(100vh - 120px);border:none;display:block;"
+                        title="ADK Chat UI"
+                        allow="microphone">
+                </iframe>
+            ]]></text>
         </render-mode>
     </widgets>
 </screen>
