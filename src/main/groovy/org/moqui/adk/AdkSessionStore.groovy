@@ -48,6 +48,7 @@ class AdkSessionStore implements BaseSessionService {
     @Override
     Single<Session> createSession(String appName, String userId, ConcurrentMap<String, Object> state, String sessionId) {
         def ec = ecf.getExecutionContext()
+        boolean wasDisabled = ec.artifactExecution.disableAuthz()
         try {
             ec.entity.makeValue("moqui.adk.AdkSession")
                     .set("sessionId", sessionId)
@@ -68,6 +69,7 @@ class AdkSessionStore implements BaseSessionService {
             logger.error("createSession failed for ${sessionId}", e)
             return Single.error(e)
         } finally {
+            if (!wasDisabled) ec.artifactExecution.enableAuthz()
             ec.destroy()
         }
     }
@@ -75,6 +77,7 @@ class AdkSessionStore implements BaseSessionService {
     @Override
     Maybe<Session> getSession(String appName, String userId, String sessionId, Optional<GetSessionConfig> config) {
         def ec = ecf.getExecutionContext()
+        boolean wasDisabled = ec.artifactExecution.disableAuthz()
         try {
             def row = ec.entity.find("moqui.adk.AdkSession")
                     .condition("sessionId", sessionId)
@@ -97,6 +100,7 @@ class AdkSessionStore implements BaseSessionService {
             logger.error("getSession failed for ${sessionId}", e)
             return Maybe.error(e)
         } finally {
+            if (!wasDisabled) ec.artifactExecution.enableAuthz()
             ec.destroy()
         }
     }
@@ -104,6 +108,7 @@ class AdkSessionStore implements BaseSessionService {
     @Override
     Single<ListSessionsResponse> listSessions(String appName, String userId) {
         def ec = ecf.getExecutionContext()
+        boolean wasDisabled = ec.artifactExecution.disableAuthz()
         try {
             def rows = ec.entity.find("moqui.adk.AdkSession")
                     .condition("appName", appName)
@@ -122,6 +127,7 @@ class AdkSessionStore implements BaseSessionService {
         } catch (Exception e) {
             return Single.error(e)
         } finally {
+            if (!wasDisabled) ec.artifactExecution.enableAuthz()
             ec.destroy()
         }
     }
@@ -129,6 +135,7 @@ class AdkSessionStore implements BaseSessionService {
     @Override
     Completable deleteSession(String appName, String userId, String sessionId) {
         def ec = ecf.getExecutionContext()
+        boolean wasDisabled = ec.artifactExecution.disableAuthz()
         try {
             ec.entity.find("moqui.adk.AdkSessionEvent").condition("sessionId", sessionId).deleteAll()
             ec.entity.find("moqui.adk.AdkSession").condition("sessionId", sessionId).deleteAll()
@@ -136,6 +143,7 @@ class AdkSessionStore implements BaseSessionService {
         } catch (Exception e) {
             return Completable.error(e)
         } finally {
+            if (!wasDisabled) ec.artifactExecution.enableAuthz()
             ec.destroy()
         }
     }
@@ -150,6 +158,7 @@ class AdkSessionStore implements BaseSessionService {
     @Override
     Single<Event> appendEvent(Session session, Event event) {
         def ec = ecf.getExecutionContext()
+        boolean wasDisabled = ec.artifactExecution.disableAuthz()
         try {
             ec.entity.makeValue("moqui.adk.AdkSessionEvent")
                     .set("eventId", UUID.randomUUID().toString())
@@ -162,6 +171,7 @@ class AdkSessionStore implements BaseSessionService {
             logger.error("appendEvent failed for session ${session.id()}", e)
             return Single.error(e)
         } finally {
+            if (!wasDisabled) ec.artifactExecution.enableAuthz()
             ec.destroy()
         }
     }
