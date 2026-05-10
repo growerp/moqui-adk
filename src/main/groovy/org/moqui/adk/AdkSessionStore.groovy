@@ -55,7 +55,7 @@ class AdkSessionStore implements BaseSessionService {
                     .set("userId", userId)
                     .set("state", state ? JsonOutput.toJson(new HashMap<>(state)) : "{}")
                     .set("createdDate", new Timestamp(System.currentTimeMillis()))
-                    .createOrStore()
+                    .store()
 
             ConcurrentMap<String, Object> sessionState = new ConcurrentHashMap<>(state ?: [:])
             return Single.just(Session.builder()
