@@ -15,8 +15,9 @@ package org.moqui.adk
 
 import com.google.adk.agents.LlmAgent
 import com.google.adk.runner.Runner
-import com.google.adk.sessions.BaseSessionService
 import com.google.adk.web.AdkWebServer
+import com.google.genai.types.Content
+import com.google.genai.types.Part
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import jakarta.servlet.ServletConfig
@@ -34,9 +35,9 @@ class AdkServlet extends HttpServlet {
 
     private ExecutionContextFactoryImpl ecf
     private Runner runner
+    private LlmAgent agent
     private AdkSessionStore sessionStore
     private int adkWebPort = 8090
-    private int keepAliveIntervalSeconds = 30
     private Thread adkWebThread
 
     @Override
@@ -44,19 +45,22 @@ class AdkServlet extends HttpServlet {
         super.init(config)
 
         ecf = (ExecutionContextFactoryImpl) config.servletContext.getAttribute("executionContextFactory")
-
         adkWebPort = (config.getInitParameter("adkWebPort") ?: "8090") as int
-        keepAliveIntervalSeconds = (config.getInitParameter("keepAliveIntervalSeconds") ?: "30") as int
 
         sessionStore = new AdkSessionStore(ecf)
+        agent = buildAgent()
 
-        // Load agent config from entity and build runner
-        initRunner()
+        runner = Runner.builder()
+                .agent(agent)
+                .appName("growerp")
+                .sessionService(sessionStore)
+                .build()
 
         // Start ADK web UI (Spring Boot) in a background daemon thread
         adkWebThread = new Thread({
             try {
-                AdkWebServer.main(["--server.port=${adkWebPort}".toString()] as String[])
+                System.setProperty("server.port", adkWebPort as String)
+                AdkWebServer.start(agent)
             } catch (Exception e) {
                 logger.error("ADK web server failed", e)
             }
@@ -65,10 +69,10 @@ class AdkServlet extends HttpServlet {
         adkWebThread.name = "AdkWebServer"
         adkWebThread.start()
 
-        logger.info("AdkServlet initialized, ADK web UI on port ${adkWebPort}")
+        logger.info("AdkServlet initialized, ADK web UI starting on port ${adkWebPort}")
     }
 
-    private void initRunner() {
+    private LlmAgent buildAgent() {
         def ec = ecf.getExecutionContext()
         try {
             def configValue = ec.entity.find("moqui.adk.AdkAgentConfig")
@@ -76,19 +80,12 @@ class AdkServlet extends HttpServlet {
 
             String modelName = configValue?.modelName ?: "gemini-2.0-flash"
             String agentName = configValue?.agentName ?: "MoquiAgent"
-            String systemPrompt = configValue?.systemPrompt ?: "You are a helpful assistant for the GrowERP system."
+            String systemPrompt = configValue?.systemPrompt ?: "You are a helpful assistant for the GrowERP ERP system."
 
-            def agent = LlmAgent.builder()
+            return LlmAgent.builder()
                     .name(agentName)
                     .model(modelName)
-                    .description("GrowERP ADK Agent")
                     .instruction(systemPrompt)
-                    .build()
-
-            runner = new Runner.Builder()
-                    .agent(agent)
-                    .appName("growerp")
-                    .sessionService(sessionStore)
                     .build()
         } finally {
             ec.destroy()
@@ -111,7 +108,6 @@ class AdkServlet extends HttpServlet {
         }
 
         if (path.startsWith("/ui")) {
-            // Reverse-proxy to ADK Spring Boot web UI
             proxyToAdkWeb(req, resp, path.substring(3) ?: "/")
             return
         }
@@ -119,7 +115,7 @@ class AdkServlet extends HttpServlet {
         if (!authenticate(req, resp)) return
 
         if (path == "/api/sessions" || path.startsWith("/api/sessions/")) {
-            handleSessionsGet(req, resp, path)
+            handleSessionsGet(req, resp)
             return
         }
 
@@ -153,7 +149,6 @@ class AdkServlet extends HttpServlet {
     private boolean authenticate(HttpServletRequest req, HttpServletResponse resp) {
         def ec = ecf.getExecutionContext()
         try {
-            // Try Moqui session cookie first, then Basic auth
             String authHeader = req.getHeader("Authorization")
             boolean loggedIn = false
 
@@ -164,8 +159,7 @@ class AdkServlet extends HttpServlet {
                     loggedIn = ec.user.loginUser(decoded.substring(0, colon), decoded.substring(colon + 1))
                 }
             } else {
-                // Check existing Moqui session
-                loggedIn = ec.user.userId != null
+                loggedIn = (ec.user.userId != null)
             }
 
             if (!loggedIn) {
@@ -189,18 +183,19 @@ class AdkServlet extends HttpServlet {
         String message = body.message ?: ""
 
         try {
-            def content = com.google.adk.models.Content.fromText(message)
-            def events = runner.runAsync(userId, sessionId, content)
-                    .toList().blockingGet()
+            Content userContent = Content.fromParts(Part.fromText(message))
+            List events = runner.runAsync(userId, sessionId, userContent).toList().blockingGet()
 
-            String lastText = events.findAll { it.content()?.isPresent() }
-                    .collect { it.content().get() }
-                    .findAll { it.parts()?.isPresent() }
-                    .collect { it.parts().get()*.text() }
-                    .flatten().last() ?: ""
+            String responseText = events.findAll { event ->
+                event.content()?.isPresent() && event.turnComplete()?.orElse(false)
+            }.collect { event ->
+                event.content().get().parts()?.orElse([])?.collect { part ->
+                    part.text()?.orElse("")
+                }?.join("")
+            }.findAll { it }.join("")
 
             resp.contentType = "application/json"
-            resp.writer.write(JsonOutput.toJson([sessionId: sessionId, response: lastText]))
+            resp.writer.write(JsonOutput.toJson([sessionId: sessionId, response: responseText]))
         } catch (Exception e) {
             logger.error("ADK run failed", e)
             resp.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.message)
@@ -212,18 +207,20 @@ class AdkServlet extends HttpServlet {
         String userId = body.userId ?: "anonymous"
         String sessionId = UUID.randomUUID().toString()
 
-        def session = sessionStore.createSession("growerp", userId, null, sessionId).blockingGet()
+        def session = sessionStore.createSession("growerp", userId,
+                new java.util.concurrent.ConcurrentHashMap<>(), sessionId).blockingGet()
         resp.contentType = "application/json"
         resp.writer.write(JsonOutput.toJson([sessionId: session.id(), userId: userId]))
     }
 
-    private void handleSessionsGet(HttpServletRequest req, HttpServletResponse resp, String path) {
+    private void handleSessionsGet(HttpServletRequest req, HttpServletResponse resp) {
         resp.contentType = "application/json"
         resp.writer.write(JsonOutput.toJson([sessions: []]))
     }
 
     // Reverse-proxy a request to the ADK Spring Boot web server on adkWebPort
     private void proxyToAdkWeb(HttpServletRequest req, HttpServletResponse resp, String targetPath) {
+        if (!targetPath || targetPath == "") targetPath = "/"
         String queryString = req.queryString ? "?${req.queryString}" : ""
         URL target = new URL("http://localhost:${adkWebPort}${targetPath}${queryString}")
 
@@ -233,7 +230,6 @@ class AdkServlet extends HttpServlet {
         conn.readTimeout = 30000
         conn.instanceFollowRedirects = false
 
-        // Forward request headers (skip hop-by-hop headers)
         Set<String> skipHeaders = ["host", "connection", "transfer-encoding"] as Set
         req.headerNames.each { name ->
             if (!skipHeaders.contains(name.toLowerCase())) {
@@ -249,13 +245,12 @@ class AdkServlet extends HttpServlet {
         try {
             conn.connect()
         } catch (ConnectException e) {
-            resp.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "ADK web UI not ready yet")
+            resp.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "ADK web UI not ready yet, try again in a few seconds")
             return
         }
 
         resp.status = conn.responseCode
 
-        // Forward response headers
         conn.headerFields.each { name, values ->
             if (name && !["transfer-encoding", "connection"].contains(name.toLowerCase())) {
                 values.each { resp.addHeader(name, it) }
