@@ -27,7 +27,7 @@
                     <box-body>
                         <label text="Server URL: ${adkServerUrl}" type="p"/>
                         <label text="Status: ${adkReady ? 'Running' : 'Not reachable'}" type="p"
-                               style="${adkReady ? 'color:green' : 'color:red'}"/>
+                               style="${adkReady ? 'color:green;font-weight:bold' : 'color:red'}"/>
                     </box-body>
                     <box-toolbar>
                         <link url="../ChatUI" text="Open Chat UI" btn-type="primary"/>
@@ -37,10 +37,19 @@
             </row-col>
             <row-col lg="6" md="12">
                 <container-box>
-                    <box-header title="Quick Start"/>
+                    <box-header title="${adkReady ? 'Ready' : 'Quick Start'}"/>
                     <box-body>
-                        <label text="Start your ADK server, then configure its URL below." type="p"/>
-                        <label text="Example: adk web --port 8090" type="p" style="font-family:monospace"/>
+                        <section name="ReadySection" condition="adkReady">
+                            <widgets>
+                                <label text="ADK server is running at ${adkServerUrl}" type="p" style="color:green"/>
+                                <label text="Use the Chat UI tab to interact with your agent." type="p"/>
+                            </widgets>
+                            <fail-widgets>
+                                <label text="Start your ADK server, then open the Chat UI." type="p"/>
+                                <label text="From moqui/:" type="p"/>
+                                <label text="GOOGLE_GENAI_API_KEY=... ./gradlew :runtime:component:moqui-adk:adkServer" type="p" style="font-family:monospace;font-size:0.85em"/>
+                            </fail-widgets>
+                        </section>
                     </box-body>
                 </container-box>
             </row-col>
