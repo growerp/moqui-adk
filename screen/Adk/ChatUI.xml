@@ -45,6 +45,10 @@
                     var CREATE_URL = base + '/createSession';
                     var RUN_URL    = base + '/runAgent';
                     var SID = null, BUSY = false;
+                    function headers() {
+                        var t = document.getElementById('confMoquiSessionToken');
+                        return {'Content-Type':'application/json','Accept':'application/json','X-CSRF-Token': t ? t.value : ''};
+                    }
 
                     function st(m){ document.getElementById('adk-st').textContent = m; }
                     function addMsg(cls, txt){
@@ -55,7 +59,7 @@
                         return d;
                     }
 
-                    fetch(CREATE_URL, {method:'POST', headers:{'Content-Type':'application/json','Accept':'application/json'}, body:'{}'})
+                    fetch(CREATE_URL, {method:'POST', headers:headers(), body:'{}'})
                     .then(function(r){ return r.json(); })
                     .then(function(d){
                         if(d.sessionId){ SID = d.sessionId; st('Ready'); }
@@ -71,7 +75,7 @@
                         addMsg('adk-u', txt);
                         var thinking = addMsg('adk-a', '…');
                         st('Thinking…');
-                        fetch(RUN_URL, {method:'POST', headers:{'Content-Type':'application/json','Accept':'application/json'},
+                        fetch(RUN_URL, {method:'POST', headers:headers(),
                             body: JSON.stringify({sessionId: SID, message: txt})})
                         .then(function(r){ return r.json(); })
                         .then(function(d){
