@@ -19,6 +19,7 @@ import com.google.adk.sessions.GetSessionConfig
 import com.google.adk.sessions.ListEventsResponse
 import com.google.adk.sessions.ListSessionsResponse
 import com.google.adk.sessions.Session
+import com.google.adk.sessions.SessionKey
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import io.reactivex.rxjava3.core.Completable
@@ -59,10 +60,7 @@ class AdkSessionStore implements BaseSessionService {
                     .store()
 
             ConcurrentMap<String, Object> sessionState = new ConcurrentHashMap<>(state ?: [:])
-            return Single.just(Session.builder()
-                    .id(sessionId)
-                    .appName(appName)
-                    .userId(userId)
+            return Single.just(Session.builder(new SessionKey(appName, userId, sessionId))
                     .state(sessionState)
                     .build())
         } catch (Exception e) {
@@ -90,10 +88,7 @@ class AdkSessionStore implements BaseSessionService {
             ConcurrentMap<String, Object> state = new ConcurrentHashMap<>(
                     row.state ? jsonSlurper.parseText(row.state as String) as Map : [:])
 
-            return Maybe.just(Session.builder()
-                    .id(sessionId)
-                    .appName(appName)
-                    .userId(userId)
+            return Maybe.just(Session.builder(new SessionKey(appName, userId, sessionId))
                     .state(state)
                     .build())
         } catch (Exception e) {
@@ -116,10 +111,7 @@ class AdkSessionStore implements BaseSessionService {
                     .list()
 
             List<Session> sessions = rows.collect { row ->
-                Session.builder()
-                        .id(row.sessionId as String)
-                        .appName(appName)
-                        .userId(userId)
+                Session.builder(new SessionKey(appName, userId, row.sessionId as String))
                         .state(new ConcurrentHashMap<>())
                         .build()
             }
