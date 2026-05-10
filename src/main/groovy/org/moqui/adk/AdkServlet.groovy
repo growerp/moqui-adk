@@ -56,6 +56,9 @@ class AdkServlet extends HttpServlet {
                 .sessionService(sessionStore)
                 .build()
 
+        // Publish port so Moqui screens can read it via System.getProperty("adk.web.port")
+        System.setProperty("adk.web.port", adkWebPort as String)
+
         // Start ADK web UI (Spring Boot) in a background daemon thread
         adkWebThread = new Thread({
             try {

@@ -6,7 +6,7 @@
 
     <actions>
         <script><![CDATA[
-            adkWebPort = ec.factory.getProperty("adk.web.port") ?: "8090"
+            adkWebPort = System.getProperty("adk.web.port") ?: "8090"
             adkReady = false
             try {
                 def conn = new URL("http://localhost:${adkWebPort}/").openConnection()
