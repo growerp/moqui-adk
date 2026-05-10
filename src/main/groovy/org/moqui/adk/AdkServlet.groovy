@@ -14,6 +14,7 @@
 package org.moqui.adk
 
 import com.google.adk.agents.LlmAgent
+import com.google.adk.models.Gemini
 import com.google.adk.runner.Runner
 import com.google.adk.web.AdkWebServer
 import com.google.genai.types.Content
@@ -71,10 +72,16 @@ class AdkServlet extends HttpServlet {
                     String modelName = configValue?.modelName ?: "gemini-2.0-flash"
                     String agentName = configValue?.agentName ?: "MoquiAgent"
                     String systemPrompt = configValue?.systemPrompt ?: "You are a helpful assistant for the GrowERP ERP system."
+                    String apiKey = configValue?.apiKey ?: System.getenv("GOOGLE_GENAI_API_KEY") ?: ""
+
+                    def geminiModel = Gemini.builder()
+                            .modelName(modelName)
+                            .apiKey(apiKey)
+                            .build()
 
                     agent = LlmAgent.builder()
                             .name(agentName)
-                            .model(modelName)
+                            .model(geminiModel)
                             .instruction(systemPrompt)
                             .build()
 
