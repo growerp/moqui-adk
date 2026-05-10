@@ -96,6 +96,8 @@ class AdkServlet extends HttpServlet {
                     // Start ADK web UI now that agent is ready
                     adkWebThread = new Thread({
                         try {
+                            // Disable Spring Boot's Logback logging init — Moqui uses Log4j2
+                            System.setProperty("org.springframework.boot.logging.LoggingSystem", "none")
                             System.setProperty("server.port", adkWebPort as String)
                             AdkWebServer.start(agent)
                         } catch (Exception e) {
@@ -213,11 +215,9 @@ class AdkServlet extends HttpServlet {
             List events = runner.runAsync(userId, sessionId, userContent).toList().blockingGet()
 
             String responseText = events.findAll { event ->
-                event.content()?.isPresent() && event.turnComplete()?.orElse(false)
+                event.finalResponse()
             }.collect { event ->
-                event.content().get().parts()?.orElse([])?.collect { part ->
-                    part.text()?.orElse("")
-                }?.join("")
+                event.stringifyContent()
             }.findAll { it }.join("")
 
             resp.contentType = "application/json"
