@@ -5,12 +5,57 @@
         default-menu-index="2" require-authentication="true">
 
     <transition name="createSession" method="post">
-        <service-call name="AdkServices.create#Session" in-map="[:]" out-map="context"/>
-        <default-response type="json"/>
+        <actions><script><![CDATA[
+            import org.moqui.adk.AdkSessionHolder
+            String sid = UUID.randomUUID().toString()
+            AdkSessionHolder.sessions[sid] = []
+            ec.web.sendJsonResponse([sessionId: sid])
+        ]]></script></actions>
+        <default-response type="none"/>
     </transition>
     <transition name="runAgent" method="post">
-        <service-call name="AdkServices.run#Agent" in-map="context" out-map="context"/>
-        <default-response type="json"/>
+        <actions><script><![CDATA[
+            import groovy.json.JsonOutput
+            import groovy.json.JsonSlurper
+            import java.net.http.HttpClient
+            import java.net.http.HttpRequest
+            import java.net.http.HttpResponse
+
+            String sid = context.sessionId ?: ""
+            String msg = context.message ?: ""
+            if (!sid || !msg) { ec.web.sendJsonResponse([errorMessage: "sessionId and message required"]); return }
+
+            boolean wasDisabled = ec.artifactExecution.disableAuthz()
+            def cfg
+            try { cfg = ec.entity.find("moqui.adk.AdkAgentConfig").condition("enabled", "Y").one() }
+            finally { if (!wasDisabled) ec.artifactExecution.enableAuthz() }
+
+            String apiKey  = cfg?.apiKey ?: System.getenv("GOOGLE_API_KEY") ?: System.getenv("GOOGLE_GENAI_API_KEY") ?: System.getenv("GEMINI_API_KEY") ?: ""
+            String model   = cfg?.modelName ?: "gemini-2.0-flash"
+            String sysInstr = cfg?.instruction ?: ""
+            if (!apiKey) { ec.web.sendJsonResponse([errorMessage: "No API key configured — go to ADK → Configuration"]); return }
+
+            def history = org.moqui.adk.AdkSessionHolder.sessions.computeIfAbsent(sid, { [] })
+            history << [role: "user", parts: [[text: msg]]]
+            def bodyMap = [contents: history]
+            if (sysInstr) bodyMap['system_instruction'] = [parts: [[text: sysInstr]]]
+
+            def client  = HttpClient.newHttpClient()
+            def req = HttpRequest.newBuilder()
+                .uri(URI.create("https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(JsonOutput.toJson(bodyMap)))
+                .build()
+            def httpResp = client.send(req, HttpResponse.BodyHandlers.ofString())
+            def parsed   = new JsonSlurper().parseText(httpResp.body())
+
+            String response = parsed?.candidates?.getAt(0)?.content?.parts?.getAt(0)?.text ?: ""
+            if (!response && parsed?.error) response = "[Gemini error: ${parsed.error.message}]"
+            if (response) history << [role: "model", parts: [[text: response]]]
+
+            ec.web.sendJsonResponse([response: response])
+        ]]></script></actions>
+        <default-response type="none"/>
     </transition>
 
     <widgets>
