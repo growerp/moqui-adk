@@ -74,11 +74,11 @@
                     if (!wasDisabled) ec.artifactExecution.enableAuthz()
                 }
 
-                String apiKey   = cfg?.apiKey   ?: ""
+                String apiKey   = cfg?.apiKey ?: System.getenv("GOOGLE_API_KEY") ?: System.getenv("GOOGLE_GENAI_API_KEY") ?: ""
                 String model    = cfg?.modelName ?: "gemini-2.0-flash"
                 String sysInstr = cfg?.instruction ?: ""
 
-                if (!apiKey) { response = "[Error: no API key configured — go to ADK → Configuration]"; return }
+                if (!apiKey) { response = "[Error: no API key — set one in ADK → Configuration or env GOOGLE_API_KEY]"; return }
 
                 // Retrieve or initialise session history
                 def history = org.moqui.adk.AdkSessionHolder.sessions.computeIfAbsent(sessionId, { [] })
