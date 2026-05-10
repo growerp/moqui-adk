@@ -5,7 +5,7 @@
         default-menu-index="3" require-authentication="true">
 
     <transition name="updateConfig">
-        <service-call name="growerp.adk.AdkServices.update#AgentConfig"/>
+        <service-call name="AdkServices.update#AgentConfig"/>
         <default-response url="."/>
     </transition>
 
