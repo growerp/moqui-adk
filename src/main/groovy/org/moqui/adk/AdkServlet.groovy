@@ -34,11 +34,12 @@ class AdkServlet extends HttpServlet {
     protected final static Logger logger = LoggerFactory.getLogger(AdkServlet.class)
 
     private ExecutionContextFactoryImpl ecf
-    private Runner runner
-    private LlmAgent agent
+    private volatile Runner runner
+    private volatile LlmAgent agent
     private AdkSessionStore sessionStore
     private int adkWebPort = 8090
     private Thread adkWebThread
+    private final Object runnerLock = new Object()
 
     @Override
     void init(ServletConfig config) throws ServletException {
@@ -48,50 +49,61 @@ class AdkServlet extends HttpServlet {
         adkWebPort = (config.getInitParameter("adkWebPort") ?: "8090") as int
 
         sessionStore = new AdkSessionStore(ecf)
-        agent = buildAgent()
-
-        runner = Runner.builder()
-                .agent(agent)
-                .appName("growerp")
-                .sessionService(sessionStore)
-                .build()
+        // Runner built lazily on first request — no user context available at init time
 
         // Publish port so Moqui screens can read it via System.getProperty("adk.web.port")
         System.setProperty("adk.web.port", adkWebPort as String)
 
-        // Start ADK web UI (Spring Boot) in a background daemon thread
-        adkWebThread = new Thread({
-            try {
-                System.setProperty("server.port", adkWebPort as String)
-                AdkWebServer.start(agent)
-            } catch (Exception e) {
-                logger.error("ADK web server failed", e)
-            }
-        })
-        adkWebThread.daemon = true
-        adkWebThread.name = "AdkWebServer"
-        adkWebThread.start()
-
-        logger.info("AdkServlet initialized, ADK web UI starting on port ${adkWebPort}")
+        logger.info("AdkServlet initialized, ADK runner and web UI will start on first request")
     }
 
-    private LlmAgent buildAgent() {
-        def ec = ecf.getExecutionContext()
-        try {
-            def configValue = ec.entity.find("moqui.adk.AdkAgentConfig")
-                    .condition("enabled", "Y").list().first
+    private void ensureRunner() {
+        if (runner != null) return
+        synchronized (runnerLock) {
+            if (runner != null) return
+            def ec = ecf.getExecutionContext()
+            try {
+                boolean wasDisabled = ec.artifactExecution.disableAuthz()
+                try {
+                    def configValue = ec.entity.find("moqui.adk.AdkAgentConfig")
+                            .condition("enabled", "Y").list().first
 
-            String modelName = configValue?.modelName ?: "gemini-2.0-flash"
-            String agentName = configValue?.agentName ?: "MoquiAgent"
-            String systemPrompt = configValue?.systemPrompt ?: "You are a helpful assistant for the GrowERP ERP system."
+                    String modelName = configValue?.modelName ?: "gemini-2.0-flash"
+                    String agentName = configValue?.agentName ?: "MoquiAgent"
+                    String systemPrompt = configValue?.systemPrompt ?: "You are a helpful assistant for the GrowERP ERP system."
 
-            return LlmAgent.builder()
-                    .name(agentName)
-                    .model(modelName)
-                    .instruction(systemPrompt)
-                    .build()
-        } finally {
-            ec.destroy()
+                    agent = LlmAgent.builder()
+                            .name(agentName)
+                            .model(modelName)
+                            .instruction(systemPrompt)
+                            .build()
+
+                    runner = Runner.builder()
+                            .agent(agent)
+                            .appName("growerp")
+                            .sessionService(sessionStore)
+                            .build()
+
+                    logger.info("ADK runner built: agent=${agentName}, model=${modelName}")
+
+                    // Start ADK web UI now that agent is ready
+                    adkWebThread = new Thread({
+                        try {
+                            System.setProperty("server.port", adkWebPort as String)
+                            AdkWebServer.start(agent)
+                        } catch (Exception e) {
+                            logger.error("ADK web server failed", e)
+                        }
+                    })
+                    adkWebThread.daemon = true
+                    adkWebThread.name = "AdkWebServer"
+                    adkWebThread.start()
+                } finally {
+                    if (!wasDisabled) ec.artifactExecution.enableAuthz()
+                }
+            } finally {
+                ec.destroy()
+            }
         }
     }
 
@@ -117,6 +129,8 @@ class AdkServlet extends HttpServlet {
 
         if (!authenticate(req, resp)) return
 
+        ensureRunner()
+
         if (path == "/api/sessions" || path.startsWith("/api/sessions/")) {
             handleSessionsGet(req, resp)
             return
@@ -135,6 +149,8 @@ class AdkServlet extends HttpServlet {
         }
 
         if (!authenticate(req, resp)) return
+
+        ensureRunner()
 
         if (path == "/api/run") {
             handleRun(req, resp)
