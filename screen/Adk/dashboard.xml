@@ -6,18 +6,16 @@
 
     <actions>
         <script><![CDATA[
-            adkWebPort = System.getProperty("adk.web.port") ?: "8090"
+            configValue = ec.entity.find("moqui.adk.AdkAgentConfig").condition("enabled", "Y").one()
+            adkServerUrl = configValue?.adkServerUrl ?: "http://localhost:8090"
             adkReady = false
             try {
-                def conn = new URL("http://localhost:${adkWebPort}/").openConnection()
+                def conn = new URL("${adkServerUrl}/").openConnection()
                 conn.connectTimeout = 1000
+                conn.instanceFollowRedirects = false
                 conn.connect()
                 adkReady = conn.responseCode < 500
-            } catch (Exception e) {
-                adkReady = false
-            }
-            configValue = ec.entity.find("moqui.adk.AdkAgentConfig").condition("enabled", "Y").list().first
-            sessionCount = ec.entity.find("moqui.adk.AdkSession").count()
+            } catch (Exception e) { adkReady = false }
         ]]></script>
     </actions>
 
@@ -25,14 +23,11 @@
         <container-row>
             <row-col lg="6" md="12">
                 <container-box>
-                    <box-header title="ADK Status"/>
+                    <box-header title="ADK Server Status"/>
                     <box-body>
-                        <label text="Agent: ${configValue?.agentName ?: 'Not configured'}" type="p"/>
-                        <label text="Model: ${configValue?.modelName ?: 'Not configured'}" type="p"/>
-                        <label text="Web UI Port: ${adkWebPort}" type="p"/>
-                        <label text="Web UI Status: ${adkReady ? 'Running' : 'Starting...'}" type="p"
-                               style="${adkReady ? 'color:green' : 'color:orange'}"/>
-                        <label text="Active Sessions: ${sessionCount}" type="p"/>
+                        <label text="Server URL: ${adkServerUrl}" type="p"/>
+                        <label text="Status: ${adkReady ? 'Running' : 'Not reachable'}" type="p"
+                               style="${adkReady ? 'color:green' : 'color:red'}"/>
                     </box-body>
                     <box-toolbar>
                         <link url="../ChatUI" text="Open Chat UI" btn-type="primary"/>
@@ -42,10 +37,10 @@
             </row-col>
             <row-col lg="6" md="12">
                 <container-box>
-                    <box-header title="Quick Links"/>
+                    <box-header title="Quick Start"/>
                     <box-body>
-                        <link url="../ChatUI" text="Chat UI" type="anchor"/>
-                        <link url="../Configuration" text="Agent Configuration" type="anchor"/>
+                        <label text="Start your ADK server, then configure its URL below." type="p"/>
+                        <label text="Example: adk web --port 8090" type="p" style="font-family:monospace"/>
                     </box-body>
                 </container-box>
             </row-col>

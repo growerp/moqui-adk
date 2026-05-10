@@ -10,34 +10,25 @@
     </transition>
 
     <actions>
-        <set field="configValue" from="ec.entity.find('moqui.adk.AdkAgentConfig').condition('enabled', 'Y').list().first"/>
+        <set field="configValue" from="ec.entity.find('moqui.adk.AdkAgentConfig').condition('enabled', 'Y').one()"/>
     </actions>
 
     <widgets>
         <container-row>
             <row-col lg="8" md="12">
                 <container-box>
-                    <box-header title="ADK Agent Configuration"/>
+                    <box-header title="ADK Server Configuration"/>
                     <box-body>
+                        <label text="Point this to your standalone Google ADK server." type="p"/>
                         <form-single name="AdkConfigForm" transition="updateConfig">
-                            <field name="agentName">
-                                <default-field title="Agent Name">
-                                    <text-line size="40" default-value="${configValue?.agentName ?: 'MoquiAgent'}"/>
+                            <field name="adkServerUrl">
+                                <default-field title="ADK Server URL">
+                                    <text-line size="60" default-value="${configValue?.adkServerUrl ?: 'http://localhost:8090'}"/>
                                 </default-field>
                             </field>
-                            <field name="modelName">
-                                <default-field title="Model">
-                                    <text-line size="40" default-value="${configValue?.modelName ?: 'gemini-2.0-flash'}"/>
-                                </default-field>
-                            </field>
-                            <field name="apiKey">
-                                <default-field title="API Key (Gemini)">
-                                    <password size="60"/>
-                                </default-field>
-                            </field>
-                            <field name="systemPrompt">
-                                <default-field title="System Prompt">
-                                    <text-area rows="6" cols="60">${configValue?.systemPrompt ?: 'You are a helpful assistant for the GrowERP system.'}</text-area>
+                            <field name="description">
+                                <default-field title="Description">
+                                    <text-line size="60" default-value="${configValue?.description ?: 'ADK Server'}"/>
                                 </default-field>
                             </field>
                             <field name="submitButton">

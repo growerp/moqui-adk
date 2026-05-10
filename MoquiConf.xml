@@ -6,8 +6,7 @@
         <webapp name="webroot" http-port="8080">
             <servlet name="AdkServlet" class="org.moqui.adk.AdkServlet"
                      load-on-startup="6" async-supported="true">
-                <init-param name="keepAliveIntervalSeconds" value="30"/>
-                <init-param name="adkWebPort" value="8090"/>
+                <init-param name="adkServerUrl" value="http://localhost:8090"/>
                 <url-pattern>/adk/*</url-pattern>
             </servlet>
         </webapp>

@@ -3,35 +3,24 @@
           xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
 
     <service verb="update" noun="AgentConfig">
-        <description>Create or update ADK agent configuration. Disables all existing configs first.</description>
+        <description>Create or update ADK server configuration. Disables all existing configs first.</description>
         <in-parameters>
-            <parameter name="agentName" required="true"/>
-            <parameter name="modelName" required="true"/>
-            <parameter name="apiKey"/>
-            <parameter name="systemPrompt"/>
+            <parameter name="adkServerUrl" required="true"/>
+            <parameter name="description"/>
         </in-parameters>
         <actions>
             <script><![CDATA[
-                // Disable any existing active config
                 ec.entity.find("moqui.adk.AdkAgentConfig").condition("enabled", "Y").list().each {
                     it.set("enabled", "N").store()
                 }
-
-                // Find or create config record
-                def existing = ec.entity.find("moqui.adk.AdkAgentConfig").condition("agentName", agentName).one()
+                def existing = ec.entity.find("moqui.adk.AdkAgentConfig").condition("adkServerUrl", adkServerUrl).one()
                 if (existing) {
-                    existing.set("modelName", modelName)
-                    existing.set("systemPrompt", systemPrompt)
-                    existing.set("enabled", "Y")
-                    if (apiKey) existing.set("apiKey", apiKey)
-                    existing.store()
+                    existing.set("description", description).set("enabled", "Y").store()
                 } else {
                     ec.entity.makeValue("moqui.adk.AdkAgentConfig")
                         .setSequencedIdPrimary()
-                        .set("agentName", agentName)
-                        .set("modelName", modelName)
-                        .set("apiKey", apiKey ?: "")
-                        .set("systemPrompt", systemPrompt ?: "You are a helpful assistant for the GrowERP system.")
+                        .set("adkServerUrl", adkServerUrl)
+                        .set("description", description ?: "ADK Server")
                         .set("enabled", "Y")
                         .create()
                 }

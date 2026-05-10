@@ -25,38 +25,15 @@ repositories {
     mavenCentral()
 }
 
-// Log4J has annotation processors, disable to avoid warning
 tasks.withType(JavaCompile) { options.compilerArgs << "-proc:none" }
 tasks.withType(GroovyCompile) { options.compilerArgs << "-proc:none" }
 
 dependencies {
     compileOnly project(':framework')
     compileOnly 'jakarta.servlet:jakarta.servlet-api:6.1.0'
-
-    implementation 'com.google.adk:google-adk:1.2.0'
-    implementation 'com.google.adk:google-adk-dev:1.2.0'
-
-    testImplementation project(':framework')
-    testImplementation project(':framework').configurations.testImplementation.allDependencies
 }
 
 check.dependsOn.clear()
-
-test {
-    useJUnitPlatform()
-    testLogging { events "passed", "skipped", "failed" }
-    testLogging.showStandardStreams = true
-    testLogging.showExceptions = true
-    maxParallelForks 1
-    dependsOn cleanTest
-    systemProperty 'moqui.runtime', moquiDir.absolutePath + '/runtime'
-    systemProperty 'moqui.conf', 'conf/MoquiDevConf.xml'
-    systemProperty 'moqui.init.static', 'true'
-    maxHeapSize = "512M"
-    classpath += files(sourceSets.main.output.classesDirs)
-    classpath = classpath.filter { it.exists() }
-    beforeTest { descriptor -> logger.lifecycle("Running test: ${descriptor}") }
-}
 
 task cleanLib(type: Delete) { delete fileTree(dir: projectDir.absolutePath+'/lib', include: '*') }
 clean.dependsOn cleanLib
@@ -65,9 +42,4 @@ jar {
     destinationDirectory = file(projectDir.absolutePath + '/lib')
     archiveBaseName = jarBaseName
 }
-task copyDependencies { doLast {
-    copy { from configurations.runtimeClasspath
-        into file(projectDir.absolutePath + '/lib') }
-} }
-copyDependencies.dependsOn cleanLib
-jar.dependsOn copyDependencies
+jar.dependsOn cleanLib
