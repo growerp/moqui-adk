@@ -42,7 +42,8 @@
                 .host("generativelanguage.googleapis.com")
                 .path("/v1beta/models/${model}:generateContent")
                 .parameter("key", apiKey).build()
-            rc.addHeader("Content-Type", "application/json").addBodyParameters(bodyMap)
+            rc.addHeader("Content-Type", "application/json")
+            rc.text(groovy.json.JsonOutput.toJson(bodyMap))
             RestClient.RestResponse resp = rc.call()
             def parsed = resp.jsonObject()
 
