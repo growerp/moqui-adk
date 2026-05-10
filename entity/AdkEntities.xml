@@ -2,7 +2,7 @@
 <entities xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
           xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/entity-definition-3.xsd">
 
-    <!-- ADK agent config (one active record; apiKey stored in plaintext — encrypt at rest via Moqui crypto if needed) -->
+
     <entity entity-name="AdkAgentConfig" package="moqui.adk" use="configuration">
         <field name="adkAgentConfigId" type="id" is-pk="true"/>
         <field name="agentName"   type="text-short"/>

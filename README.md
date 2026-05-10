@@ -1,19 +1,18 @@
 # moqui-adk
 
-Google Agent Development Kit (ADK) embedded as a Moqui Framework component.
-
-Runs an ADK agent inside the Moqui JVM — no separate server, no extra ports. Chat UI and configuration live as native Moqui screens.
+LLM chat agent embedded as a Moqui Framework component. Talks to Google Gemini via direct REST API calls — no Spring Boot, no extra ports, no external SDK JARs.
 
 ---
 
 ## What This Is
 
-[Google ADK Java](https://github.com/google/adk-java) is an open-source toolkit for building AI agents backed by Gemini models. This component wires it directly into Moqui:
+A native Moqui component that adds an AI chat interface to any Moqui application:
 
-- ADK `Runner` + `InMemorySessionService` run as a singleton inside the Moqui JVM
-- Chat UI is a native Moqui screen (no iframe, no Spring Boot server)
+- Chat UI is a native Moqui screen (Bootstrap 3, chat bubbles, multi-turn conversation history)
+- Calls the Gemini REST API directly using `java.net.http.HttpClient` (JDK 11+)
+- Session history lives in JVM memory (`AdkSessionHolder`) — resets on restart
 - Agent config (model, API key, system prompt) managed from the Moqui dashboard
-- Moqui authentication guards all agent calls
+- Moqui authentication guards all transitions
 
 ---
 
@@ -24,6 +23,8 @@ Runs an ADK agent inside the Moqui JVM — no separate server, no extra ports. C
 | Java | 21+ |
 | Moqui Framework | 3.x |
 | Gemini API key | [Get one free](https://aistudio.google.com/app/apikey) |
+
+No external dependencies beyond Moqui itself. The built component is a single JAR (`moqui-adk-1.0.0.jar`).
 
 ---
 
@@ -45,39 +46,46 @@ From the Moqui root:
 ./gradlew :runtime:component:moqui-adk:jar
 ```
 
-This downloads `google-adk:1.2.0` and all transitive dependencies into `component/moqui-adk/lib/`.
+Output: `component/moqui-adk/lib/moqui-adk-1.0.0.jar` (one file, ~10 KB).
 
-### 3. Load seed data
-
-```bash
-java -jar moqui.war load types=seed,seed-initial,install no-run-es
-```
-
-### 4. Start Moqui
+### 3. Start Moqui
 
 ```bash
 java -jar moqui.war no-run-es
 ```
 
-No extra ports, no background threads. The ADK runner initializes lazily on the first chat request.
+Moqui creates the `ADK_AGENT_CONFIG` table automatically on first start. No separate data-load step required.
 
 ---
 
 ## Configuration
 
+### Option A — UI
+
 1. Log in at `http://localhost:8080/vapps` (admin: `SystemSupport` / `moqui`)
-2. Click **ADK** in the top navigation bar
-3. Click **Configuration**
-4. Fill in:
+2. Click **ADK** in the top navigation bar → **Configuration**
+3. Fill in:
 
 | Field | Description | Example |
 |-------|-------------|---------|
 | Agent Name | Identifier for this agent | `MoquiAgent` |
 | Model | Gemini model ID | `gemini-2.0-flash` |
 | API Key | Your Gemini API key | `AIza…` |
-| System Instruction | Agent behavior | See below |
+| System Instruction | Agent persona / constraints | See below |
 
-5. Click **Save Configuration**
+4. Click **Save Configuration**
+
+### Option B — Environment variable
+
+Set any of the following before starting Moqui — no UI config needed:
+
+```bash
+export GOOGLE_API_KEY=AIza...
+# or GOOGLE_GENAI_API_KEY / GEMINI_API_KEY
+java -jar moqui.war no-run-es
+```
+
+The component checks the DB first; falls back to env vars if no `enabled=Y` record with an API key exists.
 
 ### Recommended system instruction
 
@@ -90,51 +98,47 @@ Be concise and precise. When unsure, say so.
 
 ---
 
-## Using the ADK Dashboard
+## Usage
 
-### Dashboard
+**ADK → Dashboard** — shows agent name, model, and configuration status.
 
-**ADK → Dashboard** — shows agent name, model, and whether the API key is configured.
+**ADK → Chat UI** — chat window. Type a message and press Enter (or click Send). The agent maintains full conversation history within the session.
 
-### Chat UI
-
-**ADK → Chat UI** — native chat window. Sessions are created automatically; send a message and receive the agent's reply. Session state lives in the Moqui JVM's `InMemorySessionService` (resets on restart).
-
-### Configuration
-
-**ADK → Configuration** — update agent settings. Saving resets the running agent singleton so changes take effect immediately without a Moqui restart.
+**ADK → Configuration** — update agent settings. Saving takes effect on the next chat request (no restart needed).
 
 ---
 
 ## Architecture
 
 ```
-Moqui JVM (single process, single port)
-┌─────────────────────────────────────────────────────────┐
-│                                                         │
-│  Browser ──▶ /vapps/adk ──▶ Moqui Screen               │
-│                               │                         │
-│                    Moqui Transition (JSON)               │
-│                     createSession / runAgent             │
-│                               │                         │
-│                      AdkServices.xml (Groovy)            │
-│                               │                         │
-│                      AdkAgentManager (singleton)         │
-│                      ├── Runner                          │
-│                      ├── LlmAgent → Gemini API           │
-│                      └── InMemorySessionService          │
-│                                                         │
-└─────────────────────────────────────────────────────────┘
+Browser
+  │
+  ▼
+Moqui screen  /vapps/adk/ChatUI
+  │
+  │  POST /adk/ChatUI/createSession  →  returns { sessionId }
+  │  POST /adk/ChatUI/runAgent       →  returns { response }
+  │
+  ▼
+ChatUI.xml transitions (Groovy inline)
+  │
+  ├── AdkSessionHolder  (ConcurrentHashMap, JVM memory)
+  │   └── sessionId → [ {role,parts}, … ]   ← full conversation history
+  │
+  └── java.net.http.HttpClient
+        └── POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent
+              body: { system_instruction, contents: [history] }
 ```
 
-| Component | Role |
-|-----------|------|
-| `AdkAgentManager` | Singleton; holds Runner + InMemorySessionService; lazy init on first call |
-| `AdkServices.xml` | `create#Session`, `run#Agent`, `update#AgentConfig` — called via Moqui transitions |
-| `screen/Adk/ChatUI.xml` | Native chat UI; uses Moqui JSON transitions for session/message calls |
-| `screen/Adk/Configuration.xml` | Form to set model, API key, system instruction |
-| `screen/Adk/dashboard.xml` | Status overview |
-| `data/AdkSecuritySeedData.xml` | `AdkUsers` group + artifact auth |
+| File | Role |
+|------|------|
+| `screen/Adk/ChatUI.xml` | Chat UI + `createSession` / `runAgent` transitions |
+| `screen/Adk/dashboard.xml` | Status overview (agent name, model, key configured) |
+| `screen/Adk/Configuration.xml` | Form to save agent config |
+| `service/AdkServices.xml` | `update#AgentConfig`, `create#Session`, `run#Agent` services |
+| `entity/AdkEntities.xml` | `AdkAgentConfig` entity |
+| `src/.../AdkSessionHolder.groovy` | Static `ConcurrentHashMap` for in-memory session history |
+| `data/AdkSecuritySeedData.xml` | `AdkUsers` group + artifact auth rules |
 
 ---
 
@@ -144,22 +148,17 @@ Moqui JVM (single process, single port)
 |--------|---------|
 | `moqui.adk.AdkAgentConfig` | Agent config: name, model, API key, instruction, enabled flag |
 
-Sessions live in `InMemorySessionService` (JVM memory only — no DB persistence yet).
+Session history is in-memory only (`AdkSessionHolder`) — not persisted to the database.
 
 ---
 
 ## Verifying the Installation
 
-### 1. Check JARs built
+### 1. Check JAR built
 
 ```bash
-ls moqui/runtime/component/moqui-adk/lib/google-adk*.jar
-```
-
-Expected: `google-adk-1.2.0.jar` present. If missing:
-
-```bash
-cd moqui && ./gradlew :runtime:component:moqui-adk:jar
+ls moqui/runtime/component/moqui-adk/lib/
+# Expected: moqui-adk-1.0.0.jar  (one file)
 ```
 
 ### 2. Check component loaded
@@ -170,38 +169,37 @@ After starting Moqui, search startup log for:
 Component moqui-adk loaded
 ```
 
-### 3. Check seed data
+### 3. Test via browser
+
+Navigate to `http://localhost:8080/vapps` → **ADK** → **Chat UI** → type a message → agent replies.
+
+### 4. Test via curl
 
 ```bash
-curl -u SystemSupport:moqui \
-  "http://localhost:8080/rest/s1/moqui/UserGroups?userGroupId=AdkUsers"
-```
+# Authenticate and grab CSRF token
+SESSION=$(curl -s -c /tmp/moqui-cookies.txt -b /tmp/moqui-cookies.txt \
+  -X POST http://localhost:8080/apps/Login \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=SystemSupport&password=moqui" -D - | grep -i location)
 
-Expected: JSON row with `userGroupId: "AdkUsers"`. If missing, re-run the load step.
+CSRF=$(curl -s -c /tmp/moqui-cookies.txt -b /tmp/moqui-cookies.txt \
+  http://localhost:8080/apps/adk/ChatUI \
+  | grep confMoquiSessionToken | sed 's/.*value="\([^"]*\)".*/\1/')
 
-### 4. Test via browser
-
-Navigate to `http://localhost:8080/vapps` → **ADK** → **Configuration** → enter API key → Save.
-
-Then **ADK → Chat UI** → type a message → agent replies.
-
-### 5. Test via Moqui transition endpoints
-
-```bash
 # Create session
-curl -u SystemSupport:moqui -s -X POST \
-  http://localhost:8080/vapps/adk/ChatUI/createSession \
-  -H "Content-Type: application/json" -d '{}'
+curl -s -X POST http://localhost:8080/apps/adk/ChatUI/createSession \
+  -b /tmp/moqui-cookies.txt \
+  -H "Content-Type: application/json" -H "Accept: application/json" \
+  -H "X-CSRF-Token: $CSRF" -d '{}'
+# → {"sessionId":"<uuid>"}
 
-# Response: {"sessionId":"<uuid>"}
-
-# Run agent (replace <uuid>)
-curl -u SystemSupport:moqui -s -X POST \
-  http://localhost:8080/vapps/adk/ChatUI/runAgent \
-  -H "Content-Type: application/json" \
+# Send message (replace <uuid>)
+curl -s -X POST http://localhost:8080/apps/adk/ChatUI/runAgent \
+  -b /tmp/moqui-cookies.txt \
+  -H "Content-Type: application/json" -H "Accept: application/json" \
+  -H "X-CSRF-Token: $CSRF" \
   -d '{"sessionId":"<uuid>","message":"Hello, who are you?"}'
-
-# Response: {"response":"..."}
+# → {"response":"..."}
 ```
 
 ---
@@ -210,7 +208,20 @@ curl -u SystemSupport:moqui -s -X POST \
 
 ### "Config error — set API key in Configuration"
 
-No `AdkAgentConfig` row with `enabled=Y` and a non-empty `apiKey`. Go to **ADK → Configuration** and save.
+No API key found in DB or environment. Either:
+- Go to **ADK → Configuration** and save an API key, or
+- Set `GOOGLE_API_KEY` env var before starting Moqui
+
+### Chat UI shows blank / empty screen
+
+Moqui is serving a cached older version. Restart Moqui.
+
+### Agent returns empty response
+
+Gemini returned no candidate text. Check:
+- API key is valid (test at [aistudio.google.com](https://aistudio.google.com))
+- Model name is correct (`gemini-2.0-flash` is the default)
+- Prompt is not blocked by Gemini safety filters
 
 ### `ClassNotFoundException` on Moqui start
 
@@ -222,25 +233,19 @@ cd moqui && ./gradlew :runtime:component:moqui-adk:jar
 
 Then restart Moqui.
 
-### Agent returns empty response
-
-The Gemini model returned no `finalResponse` event. Try a simpler prompt. Check that the API key is valid and the model name (`gemini-2.0-flash`) is accessible on your account.
-
-### Config changes not taking effect
-
-`update#AgentConfig` calls `AdkAgentManager.reset()` — the singleton is cleared and rebuilt on the next request. No restart needed.
-
 ---
 
 ## Development
 
-### Rebuild after code changes
+### Rebuild after Groovy changes
 
 ```bash
 cd moqui/runtime/component/moqui-adk
 ../../../gradlew jar
 # restart Moqui
 ```
+
+Screen XML and service XML changes take effect without rebuild (Moqui hot-reloads them).
 
 ### Commit and push
 
@@ -260,8 +265,7 @@ git push origin growerp
 
 ## Links
 
-- [Google ADK Documentation](https://google.github.io/adk-docs/)
-- [Google ADK Java on GitHub](https://github.com/google/adk-java)
+- [Gemini API reference](https://ai.google.dev/api/generate-content)
 - [Moqui Framework](https://github.com/moqui/moqui-framework)
 - [Get a Gemini API Key](https://aistudio.google.com/app/apikey)
 - [GrowERP](https://github.com/growerp/growerp)
