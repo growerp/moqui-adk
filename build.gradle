@@ -30,22 +30,14 @@ tasks.withType(GroovyCompile) { options.compilerArgs << "-proc:none" }
 
 dependencies {
     compileOnly project(':framework')
-    implementation 'com.google.adk:google-adk:1.2.0'
 }
 
 check.dependsOn.clear()
 
-task cleanLib(type: Delete) { delete fileTree(dir: projectDir.absolutePath+'/lib', include: '*') }
+task cleanLib(type: Delete) { delete fileTree(dir: projectDir.absolutePath+'/lib', include: '*.jar') }
 clean.dependsOn cleanLib
-
-// Copy google-adk and its transitive dependencies into lib/ so Moqui loads them
-task copyDependencies(type: Copy, dependsOn: cleanLib) {
-    from configurations.runtimeClasspath
-    into file(projectDir.absolutePath + '/lib')
-}
 
 jar {
     destinationDirectory = file(projectDir.absolutePath + '/lib')
     archiveBaseName = jarBaseName
 }
-jar.dependsOn copyDependencies

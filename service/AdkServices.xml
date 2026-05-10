@@ -3,7 +3,7 @@
           xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
 
     <service verb="update" noun="AgentConfig">
-        <description>Save ADK agent configuration. Disables all existing configs first, then resets the live agent.</description>
+        <description>Save ADK agent configuration.</description>
         <in-parameters>
             <parameter name="agentName"   default-value="MoquiAgent"/>
             <parameter name="modelName"   default-value="gemini-2.0-flash"/>
@@ -32,38 +32,25 @@
                         .set("enabled", "Y")
                         .create()
                 }
-                org.moqui.adk.AdkAgentManager.reset()
             ]]></script>
         </actions>
     </service>
 
     <service verb="create" noun="Session" authenticate="true">
-        <description>Create a new ADK chat session for the current user.</description>
+        <description>Create a new chat session for the current user.</description>
         <out-parameters>
             <parameter name="sessionId"/>
         </out-parameters>
         <actions>
             <script><![CDATA[
-                import org.moqui.adk.AdkAgentManager
-                boolean wasDisabled = ec.artifactExecution.disableAuthz()
-                try {
-                    def cfg = ec.entity.find("moqui.adk.AdkAgentConfig").condition("enabled", "Y").one()
-                    def manager = AdkAgentManager.getInstance(
-                        cfg?.agentName   ?: "MoquiAgent",
-                        cfg?.modelName   ?: "gemini-2.0-flash",
-                        cfg?.apiKey      ?: "",
-                        cfg?.instruction ?: "You are a helpful assistant for the GrowERP ERP system."
-                    )
-                    sessionId = manager.createSession(ec.user.userId ?: "anonymous")
-                } finally {
-                    if (!wasDisabled) ec.artifactExecution.enableAuthz()
-                }
+                sessionId = UUID.randomUUID().toString()
+                org.moqui.adk.AdkSessionHolder.sessions[sessionId] = []
             ]]></script>
         </actions>
     </service>
 
     <service verb="run" noun="Agent" authenticate="true">
-        <description>Send a message to the ADK agent and return its response.</description>
+        <description>Send a message to the Gemini agent and return its reply.</description>
         <in-parameters>
             <parameter name="sessionId" required="true"/>
             <parameter name="message"   required="true"/>
@@ -73,20 +60,48 @@
         </out-parameters>
         <actions>
             <script><![CDATA[
-                import org.moqui.adk.AdkAgentManager
+                import groovy.json.JsonOutput
+                import groovy.json.JsonSlurper
+                import java.net.http.HttpClient
+                import java.net.http.HttpRequest
+                import java.net.http.HttpResponse
+
                 boolean wasDisabled = ec.artifactExecution.disableAuthz()
+                def cfg
                 try {
-                    def cfg = ec.entity.find("moqui.adk.AdkAgentConfig").condition("enabled", "Y").one()
-                    def manager = AdkAgentManager.getInstance(
-                        cfg?.agentName   ?: "MoquiAgent",
-                        cfg?.modelName   ?: "gemini-2.0-flash",
-                        cfg?.apiKey      ?: "",
-                        cfg?.instruction ?: "You are a helpful assistant for the GrowERP ERP system."
-                    )
-                    response = manager.runSync(ec.user.userId ?: "anonymous", sessionId, message)
+                    cfg = ec.entity.find("moqui.adk.AdkAgentConfig").condition("enabled", "Y").one()
                 } finally {
                     if (!wasDisabled) ec.artifactExecution.enableAuthz()
                 }
+
+                String apiKey   = cfg?.apiKey   ?: ""
+                String model    = cfg?.modelName ?: "gemini-2.0-flash"
+                String sysInstr = cfg?.instruction ?: ""
+
+                if (!apiKey) { response = "[Error: no API key configured — go to ADK → Configuration]"; return }
+
+                // Retrieve or initialise session history
+                def history = org.moqui.adk.AdkSessionHolder.sessions.computeIfAbsent(sessionId, { [] })
+                history << [role: "user", parts: [[text: message]]]
+
+                def bodyMap = [contents: history]
+                if (sysInstr) bodyMap['system_instruction'] = [parts: [[text: sysInstr]]]
+
+                def client  = HttpClient.newHttpClient()
+                def request = HttpRequest.newBuilder()
+                    .uri(URI.create("https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(JsonOutput.toJson(bodyMap)))
+                    .build()
+
+                def httpResp = client.send(request, HttpResponse.BodyHandlers.ofString())
+                def parsed   = new JsonSlurper().parseText(httpResp.body())
+
+                response = parsed?.candidates?.getAt(0)?.content?.parts?.getAt(0)?.text ?: ""
+                if (!response && parsed?.error) response = "[Gemini error: ${parsed.error.message}]"
+
+                // Append model reply to history for multi-turn context
+                if (response) history << [role: "model", parts: [[text: response]]]
             ]]></script>
         </actions>
     </service>
