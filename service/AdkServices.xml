@@ -27,7 +27,7 @@
                     existing.store()
                 } else {
                     ec.entity.makeValue("moqui.adk.AdkAgentConfig")
-                        .set("adkAgentConfigId", ec.entity.sequencedIdPrimary)
+                        .setSequencedIdPrimary()
                         .set("agentName", agentName)
                         .set("modelName", modelName)
                         .set("apiKey", apiKey ?: "")
