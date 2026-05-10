@@ -1,4 +1,4 @@
-<iframe src="/adk/ui/"
+<iframe src="/adk/ui/dev-ui"
         style="width:100%;height:calc(100vh - 120px);border:none;display:block;"
         title="ADK Chat UI"
         allow="microphone">

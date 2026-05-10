@@ -277,9 +277,16 @@ class AdkServlet extends HttpServlet {
 
         resp.status = conn.responseCode
 
+        String adkOrigin = "http://localhost:${adkWebPort}"
         conn.headerFields.each { name, values ->
             if (name && !["transfer-encoding", "connection"].contains(name.toLowerCase())) {
-                values.each { resp.addHeader(name, it) }
+                values.each { value ->
+                    // Rewrite Location headers so redirects stay within the proxy
+                    String rewritten = (name.toLowerCase() == "location" && value?.startsWith(adkOrigin))
+                            ? "/adk/ui" + value.substring(adkOrigin.length())
+                            : value
+                    resp.addHeader(name, rewritten)
+                }
             }
         }
 
