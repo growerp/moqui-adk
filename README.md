@@ -240,6 +240,106 @@ The Gemini API key is stored encrypted in the `AdkAgentConfig` entity using Moqu
 
 ---
 
+## Verifying the Installation
+
+Run these checks in order after completing the installation steps.
+
+### 1. Check JAR was built
+
+```bash
+ls moqui/runtime/component/moqui-adk/lib/google-adk*.jar
+```
+
+Expected: one or more `google-adk-*.jar` files. If missing, run:
+
+```bash
+cd moqui && ./gradlew :runtime:component:moqui-adk:jar
+```
+
+### 2. Check Moqui loaded the component
+
+After starting Moqui, search the startup log for:
+
+```
+Component moqui-adk loaded
+AdkServlet initialized
+```
+
+If `AdkServlet initialized` is missing, the servlet was not registered. Verify `MoquiConf.xml` contains the `<webapp-list>` block with the servlet.
+
+### 3. Check the servlet responds
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/adk/
+```
+
+Expected: `302` (redirect to `/adk/ui/`). A `404` means the servlet is not mapped — check `MoquiConf.xml`.
+
+### 4. Check seed data loaded (security group exists)
+
+```bash
+curl -u SystemSupport:moqui \
+  "http://localhost:8080/rest/s1/moqui/UserGroups?userGroupId=AdkUsers"
+```
+
+Expected: JSON with `userGroupId: "AdkUsers"`. If empty, re-run:
+
+```bash
+java -jar moqui.war load types=seed no-run-es
+```
+
+### 5. Check API authentication
+
+```bash
+# Should succeed (200)
+curl -u SystemSupport:moqui -s -o /dev/null -w "%{http_code}" \
+  -X POST http://localhost:8080/adk/api/sessions \
+  -H "Content-Type: application/json" \
+  -d '{"userId":"SystemSupport"}'
+
+# Should fail (401)
+curl -s -o /dev/null -w "%{http_code}" \
+  -X POST http://localhost:8080/adk/api/sessions \
+  -H "Content-Type: application/json" \
+  -d '{"userId":"SystemSupport"}'
+```
+
+### 6. Create a session and run the agent
+
+```bash
+# Step 1: create session, capture sessionId
+SESSION=$(curl -u SystemSupport:moqui -s -X POST http://localhost:8080/adk/api/sessions \
+  -H "Content-Type: application/json" \
+  -d '{"userId":"SystemSupport"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['sessionId'])")
+
+echo "Session: $SESSION"
+
+# Step 2: run agent (requires API key configured in ADK → Configuration)
+curl -u SystemSupport:moqui -X POST http://localhost:8080/adk/api/run \
+  -H "Content-Type: application/json" \
+  -d "{\"sessionId\":\"$SESSION\",\"userId\":\"SystemSupport\",\"message\":\"Hello, who are you?\"}"
+```
+
+Expected: JSON with `response` field containing agent text.
+
+### 7. Check ADK web UI proxy
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/adk/ui/
+```
+
+Expected: `200`. A `503` means the ADK Spring Boot server has not started yet — wait 15–20 seconds and retry. Check logs for Spring Boot startup output on port 8090.
+
+### 8. Check dashboard in browser
+
+Navigate to `http://localhost:8080/vapps` → log in → click **ADK** in the top nav bar.
+
+- **Dashboard** should show agent name, model, and session count
+- **Chat UI** tab should render the ADK web interface
+- **Configuration** tab should show the config form
+
+---
+
 ## Troubleshooting
 
 ### ADK web UI shows "not ready yet"
