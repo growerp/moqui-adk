@@ -3,9 +3,12 @@
           xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
 
     <service verb="update" noun="AgentConfig">
-        <description>Create or update ADK server configuration. Disables all existing configs first.</description>
+        <description>Save ADK agent configuration. Disables all existing configs first, then resets the live agent.</description>
         <in-parameters>
-            <parameter name="adkServerUrl" required="true"/>
+            <parameter name="agentName"   default-value="MoquiAgent"/>
+            <parameter name="modelName"   default-value="gemini-2.0-flash"/>
+            <parameter name="apiKey"      required="true"/>
+            <parameter name="instruction"/>
             <parameter name="description"/>
         </in-parameters>
         <actions>
@@ -13,16 +16,76 @@
                 ec.entity.find("moqui.adk.AdkAgentConfig").condition("enabled", "Y").list().each {
                     it.set("enabled", "N").store()
                 }
-                def existing = ec.entity.find("moqui.adk.AdkAgentConfig").condition("adkServerUrl", adkServerUrl).one()
+                def existing = ec.entity.find("moqui.adk.AdkAgentConfig").condition("agentName", agentName).one()
                 if (existing) {
-                    existing.set("description", description).set("enabled", "Y").store()
+                    existing.set("modelName", modelName).set("apiKey", apiKey)
+                        .set("instruction", instruction).set("description", description)
+                        .set("enabled", "Y").store()
                 } else {
                     ec.entity.makeValue("moqui.adk.AdkAgentConfig")
                         .setSequencedIdPrimary()
-                        .set("adkServerUrl", adkServerUrl)
-                        .set("description", description ?: "ADK Server")
+                        .set("agentName",   agentName   ?: "MoquiAgent")
+                        .set("modelName",   modelName   ?: "gemini-2.0-flash")
+                        .set("apiKey",      apiKey)
+                        .set("instruction", instruction ?: "You are a helpful assistant for the GrowERP ERP system.")
+                        .set("description", description ?: "ADK Agent")
                         .set("enabled", "Y")
                         .create()
+                }
+                org.moqui.adk.AdkAgentManager.reset()
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="create" noun="Session" authenticate="true">
+        <description>Create a new ADK chat session for the current user.</description>
+        <out-parameters>
+            <parameter name="sessionId"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import org.moqui.adk.AdkAgentManager
+                boolean wasDisabled = ec.artifactExecution.disableAuthz()
+                try {
+                    def cfg = ec.entity.find("moqui.adk.AdkAgentConfig").condition("enabled", "Y").one()
+                    def manager = AdkAgentManager.getInstance(
+                        cfg?.agentName   ?: "MoquiAgent",
+                        cfg?.modelName   ?: "gemini-2.0-flash",
+                        cfg?.apiKey      ?: "",
+                        cfg?.instruction ?: "You are a helpful assistant for the GrowERP ERP system."
+                    )
+                    sessionId = manager.createSession(ec.user.userId ?: "anonymous")
+                } finally {
+                    if (!wasDisabled) ec.artifactExecution.enableAuthz()
+                }
+            ]]></script>
+        </actions>
+    </service>
+
+    <service verb="run" noun="Agent" authenticate="true">
+        <description>Send a message to the ADK agent and return its response.</description>
+        <in-parameters>
+            <parameter name="sessionId" required="true"/>
+            <parameter name="message"   required="true"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="response"/>
+        </out-parameters>
+        <actions>
+            <script><![CDATA[
+                import org.moqui.adk.AdkAgentManager
+                boolean wasDisabled = ec.artifactExecution.disableAuthz()
+                try {
+                    def cfg = ec.entity.find("moqui.adk.AdkAgentConfig").condition("enabled", "Y").one()
+                    def manager = AdkAgentManager.getInstance(
+                        cfg?.agentName   ?: "MoquiAgent",
+                        cfg?.modelName   ?: "gemini-2.0-flash",
+                        cfg?.apiKey      ?: "",
+                        cfg?.instruction ?: "You are a helpful assistant for the GrowERP ERP system."
+                    )
+                    response = manager.runSync(ec.user.userId ?: "anonymous", sessionId, message)
+                } finally {
+                    if (!wasDisabled) ec.artifactExecution.enableAuthz()
                 }
             ]]></script>
         </actions>

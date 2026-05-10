@@ -2,16 +2,6 @@
 <moqui-conf xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
             xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/moqui-conf-3.xsd">
 
-    <webapp-list>
-        <webapp name="webroot" http-port="8080">
-            <servlet name="AdkServlet" class="org.moqui.adk.AdkServlet"
-                     load-on-startup="6" async-supported="true">
-                <init-param name="adkServerUrl" value="http://localhost:8090"/>
-                <url-pattern>/adk/*</url-pattern>
-            </servlet>
-        </webapp>
-    </webapp-list>
-
     <screen-facade>
         <screen location="component://webroot/screen/webroot/apps.xml">
             <subscreens-item name="adk" menu-title="ADK" menu-index="96"

@@ -4,12 +4,14 @@
         default-menu-title="Chat UI" menu-image="fa fa-comments" menu-image-type="icon"
         default-menu-index="2" require-authentication="true">
 
-    <actions>
-        <script><![CDATA[
-            agentName = "MoquiAgent"
-            chatUserId = ec.user.userId ?: "user"
-        ]]></script>
-    </actions>
+    <transition name="createSession" method="post">
+        <service-call name="AdkServices.create#Session" in-map="[:]" out-map="context"/>
+        <default-response type="json"/>
+    </transition>
+    <transition name="runAgent" method="post">
+        <service-call name="AdkServices.run#Agent" in-map="context" out-map="context"/>
+        <default-response type="json"/>
+    </transition>
 
     <widgets>
         <render-mode>
@@ -38,53 +40,45 @@
                 </div>
                 <script>
                 (function(){
-                    var AGENT='${agentName}', UID='${chatUserId}', SID=null, BUSY=false;
-                    function st(m){document.getElementById('adk-st').textContent=m;}
-                    function addMsg(cls,txt){
-                        var d=document.createElement('div');
-                        d.className='adk-m '+cls; d.textContent=txt;
-                        var c=document.getElementById('adk-msgs');
-                        c.appendChild(d); c.scrollTop=c.scrollHeight; return d;
-                    }
-                    // Create session via Moqui proxy
-                    fetch('/adk/apps/'+AGENT+'/users/'+UID+'/sessions',
-                        {method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
-                    .then(function(r){
-                        if(!r.ok) throw new Error('HTTP '+r.status);
-                        return r.json();
-                    })
-                    .then(function(s){SID=s.id; st('Ready — session '+SID.substring(0,8)+'…');})
-                    .catch(function(e){st('ADK server unreachable — start it first'); addMsg('adk-e','Cannot connect: '+e);});
+                    var base = window.location.pathname;
+                    var CREATE_URL = base + '/createSession';
+                    var RUN_URL    = base + '/runAgent';
+                    var SID = null, BUSY = false;
 
-                    window.adkSend=function(){
-                        if(BUSY||!SID)return;
-                        var inp=document.getElementById('adk-in'), txt=inp.value.trim();
-                        if(!txt)return;
-                        inp.value=''; BUSY=true; document.getElementById('adk-btn').disabled=true;
-                        addMsg('adk-u',txt);
-                        var thinking=addMsg('adk-a','…');
+                    function st(m){ document.getElementById('adk-st').textContent = m; }
+                    function addMsg(cls, txt){
+                        var d = document.createElement('div');
+                        d.className = 'adk-m ' + cls; d.textContent = txt;
+                        var c = document.getElementById('adk-msgs');
+                        c.appendChild(d); c.scrollTop = c.scrollHeight;
+                        return d;
+                    }
+
+                    fetch(CREATE_URL, {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'})
+                    .then(function(r){ return r.json(); })
+                    .then(function(d){
+                        if(d.sessionId){ SID = d.sessionId; st('Ready'); }
+                        else { st('Config error — set API key in Configuration'); addMsg('adk-e', d.errorMessage || 'Failed to create session'); }
+                    })
+                    .catch(function(e){ st('Cannot connect'); addMsg('adk-e', 'Error: ' + e); });
+
+                    window.adkSend = function(){
+                        if(BUSY || !SID) return;
+                        var inp = document.getElementById('adk-in'), txt = inp.value.trim();
+                        if(!txt) return;
+                        inp.value = ''; BUSY = true; document.getElementById('adk-btn').disabled = true;
+                        addMsg('adk-u', txt);
+                        var thinking = addMsg('adk-a', '…');
                         st('Thinking…');
-                        fetch('/adk/run',{method:'POST',headers:{'Content-Type':'application/json'},
-                            body:JSON.stringify({appName:AGENT,userId:UID,sessionId:SID,
-                                newMessage:{role:'user',parts:[{text:txt}]}})})
-                        .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status); return r.json();})
-                        .then(function(evs){
-                            var reply='';
-                            if(Array.isArray(evs)){
-                                for(var i=evs.length-1;i>=0;i--){
-                                    var c=evs[i]&&evs[i].content;
-                                    if(c&&c.parts){
-                                        for(var p=0;p<c.parts.length;p++){
-                                            if(c.parts[p].text){reply=c.parts[p].text;break;}
-                                        }
-                                    }
-                                    if(reply)break;
-                                }
-                            }
-                            thinking.textContent=reply||'(no response)'; st('Ready');
+                        fetch(RUN_URL, {method:'POST', headers:{'Content-Type':'application/json'},
+                            body: JSON.stringify({sessionId: SID, message: txt})})
+                        .then(function(r){ return r.json(); })
+                        .then(function(d){
+                            if(d.response !== undefined){ thinking.textContent = d.response || '(no response)'; st('Ready'); }
+                            else { thinking.textContent = d.errorMessage || 'Unknown error'; thinking.className = 'adk-m adk-e'; st('Error'); }
                         })
-                        .catch(function(e){thinking.textContent='Error: '+e; thinking.className='adk-m adk-e'; st('Error');})
-                        .finally(function(){BUSY=false; document.getElementById('adk-btn').disabled=false;});
+                        .catch(function(e){ thinking.textContent = 'Error: ' + e; thinking.className = 'adk-m adk-e'; st('Error'); })
+                        .finally(function(){ BUSY = false; document.getElementById('adk-btn').disabled = false; });
                     };
                 })();
                 </script>

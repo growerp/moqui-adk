@@ -17,18 +17,32 @@
         <container-row>
             <row-col lg="8" md="12">
                 <container-box>
-                    <box-header title="ADK Server Configuration"/>
+                    <box-header title="ADK Agent Configuration"/>
                     <box-body>
-                        <label text="Point this to your standalone Google ADK server." type="p"/>
                         <form-single name="AdkConfigForm" transition="updateConfig">
-                            <field name="adkServerUrl">
-                                <default-field title="ADK Server URL">
-                                    <text-line size="60" default-value="${configValue?.adkServerUrl ?: 'http://localhost:8090'}"/>
+                            <field name="agentName">
+                                <default-field title="Agent Name">
+                                    <text-line size="40" default-value="${configValue?.agentName ?: 'MoquiAgent'}"/>
+                                </default-field>
+                            </field>
+                            <field name="modelName">
+                                <default-field title="Model">
+                                    <text-line size="40" default-value="${configValue?.modelName ?: 'gemini-2.0-flash'}"/>
+                                </default-field>
+                            </field>
+                            <field name="apiKey">
+                                <default-field title="Google API Key">
+                                    <password size="60" default-value="${configValue?.apiKey ?: ''}"/>
+                                </default-field>
+                            </field>
+                            <field name="instruction">
+                                <default-field title="System Instruction">
+                                    <text-area rows="4" cols="60" default-value="${configValue?.instruction ?: 'You are a helpful assistant for the GrowERP ERP system.'}"/>
                                 </default-field>
                             </field>
                             <field name="description">
                                 <default-field title="Description">
-                                    <text-line size="60" default-value="${configValue?.description ?: 'ADK Server'}"/>
+                                    <text-line size="60" default-value="${configValue?.description ?: 'ADK Agent'}"/>
                                 </default-field>
                             </field>
                             <field name="submitButton">

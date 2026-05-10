@@ -28,22 +28,9 @@ repositories {
 tasks.withType(JavaCompile) { options.compilerArgs << "-proc:none" }
 tasks.withType(GroovyCompile) { options.compilerArgs << "-proc:none" }
 
-configurations {
-    // ADK runtime deps — used only by the adkServer task, never copied to lib/
-    adkRuntime
-}
-
 dependencies {
     compileOnly project(':framework')
-    compileOnly 'jakarta.servlet:jakarta.servlet-api:6.1.0'
-
-    // AdkServerMain needs these at compile time
-    compileOnly 'com.google.adk:google-adk:1.2.0'
-    compileOnly 'com.google.adk:google-adk-dev:1.2.0'
-
-    // adkRuntime provides the classpath for the standalone server process
-    adkRuntime 'com.google.adk:google-adk:1.2.0'
-    adkRuntime 'com.google.adk:google-adk-dev:1.2.0'
+    implementation 'com.google.adk:google-adk:1.2.0'
 }
 
 check.dependsOn.clear()
@@ -51,31 +38,14 @@ check.dependsOn.clear()
 task cleanLib(type: Delete) { delete fileTree(dir: projectDir.absolutePath+'/lib', include: '*') }
 clean.dependsOn cleanLib
 
+// Copy google-adk and its transitive dependencies into lib/ so Moqui loads them
+task copyDependencies(type: Copy, dependsOn: cleanLib) {
+    from configurations.runtimeClasspath
+    into file(projectDir.absolutePath + '/lib')
+}
+
 jar {
     destinationDirectory = file(projectDir.absolutePath + '/lib')
     archiveBaseName = jarBaseName
 }
-jar.dependsOn cleanLib
-
-// Starts the ADK web server as a separate JVM process (no ADK JARs loaded into Moqui).
-// Usage:
-//   GOOGLE_GENAI_API_KEY=AIza... ./gradlew :runtime:component:moqui-adk:adkServer
-// Optional overrides (env vars or -D system properties):
-//   ADK_MODEL            (default: gemini-2.0-flash)
-//   ADK_AGENT_NAME       (default: MoquiAgent)
-//   ADK_INSTRUCTION      (default: GrowERP assistant prompt)
-//   server.port          (default: 8090, set via -Pport=NNNN)
-task adkServer(type: JavaExec, dependsOn: jar) {
-    group = 'ADK'
-    description = 'Start the standalone ADK web server (separate JVM, clean from Moqui)'
-    classpath = configurations.adkRuntime + files("${projectDir}/lib/${jarBaseName}-${version}.jar")
-    mainClass = 'org.moqui.adk.AdkServerMain'
-
-    def adkPort = project.findProperty('port') ?: '8090'
-    systemProperty 'server.port', adkPort
-    // Suppress Spring Boot Logback init — ADK dev uses Spring Boot internally
-    systemProperty 'org.springframework.boot.logging.LoggingSystem', 'none'
-
-    // Pass through GOOGLE_GENAI_API_KEY and ADK_* env vars from the shell
-    environment System.getenv().findAll { k, v -> k.startsWith('ADK_') || k == 'GOOGLE_GENAI_API_KEY' }
-}
+jar.dependsOn copyDependencies

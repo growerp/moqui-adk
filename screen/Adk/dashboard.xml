@@ -7,15 +7,9 @@
     <actions>
         <script><![CDATA[
             configValue = ec.entity.find("moqui.adk.AdkAgentConfig").condition("enabled", "Y").one()
-            adkServerUrl = configValue?.adkServerUrl ?: "http://localhost:8090"
-            adkReady = false
-            try {
-                def conn = new URL("${adkServerUrl}/").openConnection()
-                conn.connectTimeout = 1000
-                conn.instanceFollowRedirects = false
-                conn.connect()
-                adkReady = conn.responseCode < 500
-            } catch (Exception e) { adkReady = false }
+            configured  = (configValue?.apiKey) ? true : false
+            agentName   = configValue?.agentName ?: "MoquiAgent"
+            modelName   = configValue?.modelName ?: "gemini-2.0-flash"
         ]]></script>
     </actions>
 
@@ -23,31 +17,32 @@
         <container-row>
             <row-col lg="6" md="12">
                 <container-box>
-                    <box-header title="ADK Server Status"/>
+                    <box-header title="ADK Agent Status"/>
                     <box-body>
-                        <label text="Server URL: ${adkServerUrl}" type="p"/>
-                        <label text="Status: ${adkReady ? 'Running' : 'Not reachable'}" type="p"
-                               style="${adkReady ? 'color:green;font-weight:bold' : 'color:red'}"/>
+                        <label text="Agent: ${agentName}" type="p"/>
+                        <label text="Model: ${modelName}" type="p"/>
+                        <label text="Status: ${configured ? 'Configured' : 'Not configured — add API key'}"
+                               type="p" style="${configured ? 'color:green;font-weight:bold' : 'color:red'}"/>
                     </box-body>
                     <box-toolbar>
-                        <link url="../ChatUI" text="Open Chat UI" btn-type="primary"/>
+                        <link url="../ChatUI" text="Open Chat" btn-type="primary"/>
                         <link url="../Configuration" text="Configure" btn-type="default"/>
                     </box-toolbar>
                 </container-box>
             </row-col>
             <row-col lg="6" md="12">
                 <container-box>
-                    <box-header title="${adkReady ? 'Ready' : 'Quick Start'}"/>
+                    <box-header title="${configured ? 'Ready' : 'Quick Start'}"/>
                     <box-body>
-                        <section name="ReadySection" condition="adkReady">
+                        <section name="ReadySection" condition="configured">
                             <widgets>
-                                <label text="ADK server is running at ${adkServerUrl}" type="p" style="color:green"/>
+                                <label text="Agent is configured and ready to chat." type="p" style="color:green"/>
                                 <label text="Use the Chat UI tab to interact with your agent." type="p"/>
                             </widgets>
                             <fail-widgets>
-                                <label text="Start your ADK server, then open the Chat UI." type="p"/>
-                                <label text="From moqui/:" type="p"/>
-                                <label text="GOOGLE_GENAI_API_KEY=... ./gradlew :runtime:component:moqui-adk:adkServer" type="p" style="font-family:monospace;font-size:0.85em"/>
+                                <label text="1. Go to Configuration and enter your Google Gemini API key." type="p"/>
+                                <label text="2. Optionally set the model and system instruction." type="p"/>
+                                <label text="3. Save, then open the Chat UI." type="p"/>
                             </fail-widgets>
                         </section>
                     </box-body>
