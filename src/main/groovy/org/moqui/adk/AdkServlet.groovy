@@ -132,6 +132,7 @@ class AdkServlet extends HttpServlet {
         }
 
         if (path.startsWith("/ui")) {
+            ensureRunner()
             proxyToAdkWeb(req, resp, path.substring(3) ?: "/")
             return
         }
@@ -153,6 +154,7 @@ class AdkServlet extends HttpServlet {
         String path = req.pathInfo ?: "/"
 
         if (path.startsWith("/ui")) {
+            ensureRunner()
             proxyToAdkWeb(req, resp, path.substring(3) ?: "/")
             return
         }
