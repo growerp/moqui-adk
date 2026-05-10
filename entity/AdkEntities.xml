@@ -13,13 +13,4 @@
         <field name="enabled"     type="text-indicator"/>
     </entity>
 
-    <entity entity-name="AdkChatMessage" package="moqui.adk" use="transactional">
-        <field name="chatMessageId" type="id"          is-pk="true"/>
-        <field name="chatRoomId"    type="id-long"/>
-        <field name="fromUserId"    type="id-long"/>
-        <field name="message"       type="text-long"/>
-        <field name="sentDate"      type="date-time"/>
-        <index name="ADK_CM_ROOM" unique="false"><index-field name="chatRoomId"/><index-field name="sentDate"/></index>
-    </entity>
-
 </entities>
