@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<screen xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/xml-screen-3.xsd"
+        default-menu-title="Chat" menu-image="fa fa-envelope" menu-image-type="icon"
+        default-menu-index="3" require-authentication="true">
+
+    <actions>
+        <script><![CDATA[
+            boolean wasDisabled = ec.artifactExecution.disableAuthz()
+            try {
+                userList = ec.entity.find("moqui.security.UserAccount")
+                    .condition("userId", org.moqui.entity.EntityCondition.ComparisonOperator.NOT_EQUAL, ec.user.userId)
+                    .condition("disabled", org.moqui.entity.EntityCondition.ComparisonOperator.NOT_EQUAL, "Y")
+                    .orderBy("username")
+                    .list()
+            } finally {
+                if (!wasDisabled) ec.artifactExecution.enableAuthz()
+            }
+        ]]></script>
+    </actions>
+
+    <widgets>
+        <container-box>
+            <box-header title="Direct Messages"/>
+            <box-body>
+                <form-list name="UserList" list="userList" skip-form="true">
+                    <field name="username">
+                        <default-field title="Username"><display/></default-field>
+                    </field>
+                    <field name="firstName">
+                        <default-field title="First Name"><display/></default-field>
+                    </field>
+                    <field name="lastName">
+                        <default-field title="Last Name"><display/></default-field>
+                    </field>
+                    <field name="emailAddress">
+                        <default-field title="Email"><display/></default-field>
+                    </field>
+                    <field name="action">
+                        <default-field title="">
+                            <link url="ChatRoom" text="Chat" parameter-map="[toUserId:userId]"
+                                  btn-type="primary" btn-size="sm"/>
+                        </default-field>
+                    </field>
+                </form-list>
+            </box-body>
+        </container-box>
+    </widgets>
+</screen>
