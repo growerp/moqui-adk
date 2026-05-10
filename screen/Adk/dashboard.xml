@@ -7,8 +7,9 @@
     <actions>
         <script><![CDATA[
             configValue = ec.entity.find("moqui.adk.AdkAgentConfig").condition("enabled", "Y").one()
-            String envKey = System.getenv("GOOGLE_API_KEY") ?: System.getenv("GOOGLE_GENAI_API_KEY") ?: ""
-            configured  = (configValue?.apiKey || envKey) ? true : false
+            String dbKey  = configValue?.apiKey ?: ""
+            String envKey = System.getenv("GOOGLE_API_KEY") ?: System.getenv("GOOGLE_GENAI_API_KEY") ?: System.getenv("GEMINI_API_KEY") ?: ""
+            configured  = (dbKey.length() > 0 || envKey.length() > 0)
             agentName   = configValue?.agentName ?: "MoquiAgent"
             modelName   = configValue?.modelName ?: "gemini-2.0-flash"
         ]]></script>

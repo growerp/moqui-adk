@@ -74,7 +74,7 @@
                     if (!wasDisabled) ec.artifactExecution.enableAuthz()
                 }
 
-                String apiKey   = cfg?.apiKey ?: System.getenv("GOOGLE_API_KEY") ?: System.getenv("GOOGLE_GENAI_API_KEY") ?: ""
+                String apiKey   = cfg?.apiKey ?: System.getenv("GOOGLE_API_KEY") ?: System.getenv("GOOGLE_GENAI_API_KEY") ?: System.getenv("GEMINI_API_KEY") ?: ""
                 String model    = cfg?.modelName ?: "gemini-2.0-flash"
                 String sysInstr = cfg?.instruction ?: ""
 
