@@ -6,20 +6,88 @@
 
     <actions>
         <script><![CDATA[
-            configValue = ec.entity.find("moqui.adk.AdkAgentConfig").condition("enabled", "Y").one()
-            adkServerUrl = configValue?.adkServerUrl ?: "http://localhost:8090"
-            adkChatUrl = adkServerUrl + "/dev-ui"
+            agentName = "MoquiAgent"
+            chatUserId = ec.user.userId ?: "user"
         ]]></script>
     </actions>
 
     <widgets>
         <render-mode>
             <text type="html"><![CDATA[
-                <iframe src="${adkChatUrl}"
-                        style="width:100%;height:calc(100vh - 120px);border:none;display:block;"
-                        title="ADK Chat UI"
-                        allow="microphone">
-                </iframe>
+                <style>
+                #adk-chat{display:flex;flex-direction:column;height:calc(100vh - 150px);padding:12px;gap:8px;box-sizing:border-box}
+                #adk-msgs{flex:1;overflow-y:auto;border:1px solid #dee2e6;border-radius:6px;padding:12px;background:#f8f9fa}
+                .adk-m{margin:6px 0;padding:8px 12px;border-radius:12px;max-width:72%;word-wrap:break-word;line-height:1.5}
+                .adk-u{margin-left:auto;background:#3c8dbc;color:#fff;text-align:right}
+                .adk-a{background:#fff;border:1px solid #dee2e6;color:#333;white-space:pre-wrap}
+                .adk-e{background:#f8d7da;color:#721c24;border:1px solid #f5c6cb;max-width:100%}
+                #adk-row{display:flex;gap:8px}
+                #adk-in{flex:1;padding:8px 12px;border:1px solid #ccc;border-radius:4px;font-size:14px}
+                #adk-btn{padding:8px 20px;background:#3c8dbc;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:14px}
+                #adk-btn:disabled{background:#aaa;cursor:default}
+                #adk-st{font-size:12px;color:#6c757d}
+                </style>
+                <div id="adk-chat">
+                    <div id="adk-msgs"></div>
+                    <div id="adk-row">
+                        <input id="adk-in" type="text" placeholder="Type a message and press Enter…"
+                               onkeydown="if(event.key==='Enter'&amp;&amp;!event.shiftKey){event.preventDefault();adkSend();}"/>
+                        <button id="adk-btn" onclick="adkSend()">Send</button>
+                    </div>
+                    <div id="adk-st">Connecting…</div>
+                </div>
+                <script>
+                (function(){
+                    var AGENT='${agentName}', UID='${chatUserId}', SID=null, BUSY=false;
+                    function st(m){document.getElementById('adk-st').textContent=m;}
+                    function addMsg(cls,txt){
+                        var d=document.createElement('div');
+                        d.className='adk-m '+cls; d.textContent=txt;
+                        var c=document.getElementById('adk-msgs');
+                        c.appendChild(d); c.scrollTop=c.scrollHeight; return d;
+                    }
+                    // Create session via Moqui proxy
+                    fetch('/adk/apps/'+AGENT+'/users/'+UID+'/sessions',
+                        {method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+                    .then(function(r){
+                        if(!r.ok) throw new Error('HTTP '+r.status);
+                        return r.json();
+                    })
+                    .then(function(s){SID=s.id; st('Ready — session '+SID.substring(0,8)+'…');})
+                    .catch(function(e){st('ADK server unreachable — start it first'); addMsg('adk-e','Cannot connect: '+e);});
+
+                    window.adkSend=function(){
+                        if(BUSY||!SID)return;
+                        var inp=document.getElementById('adk-in'), txt=inp.value.trim();
+                        if(!txt)return;
+                        inp.value=''; BUSY=true; document.getElementById('adk-btn').disabled=true;
+                        addMsg('adk-u',txt);
+                        var thinking=addMsg('adk-a','…');
+                        st('Thinking…');
+                        fetch('/adk/run',{method:'POST',headers:{'Content-Type':'application/json'},
+                            body:JSON.stringify({appName:AGENT,userId:UID,sessionId:SID,
+                                newMessage:{role:'user',parts:[{text:txt}]}})})
+                        .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status); return r.json();})
+                        .then(function(evs){
+                            var reply='';
+                            if(Array.isArray(evs)){
+                                for(var i=evs.length-1;i>=0;i--){
+                                    var c=evs[i]&&evs[i].content;
+                                    if(c&&c.parts){
+                                        for(var p=0;p<c.parts.length;p++){
+                                            if(c.parts[p].text){reply=c.parts[p].text;break;}
+                                        }
+                                    }
+                                    if(reply)break;
+                                }
+                            }
+                            thinking.textContent=reply||'(no response)'; st('Ready');
+                        })
+                        .catch(function(e){thinking.textContent='Error: '+e; thinking.className='adk-m adk-e'; st('Error');})
+                        .finally(function(){BUSY=false; document.getElementById('adk-btn').disabled=false;});
+                    };
+                })();
+                </script>
             ]]></text>
         </render-mode>
     </widgets>
