@@ -12,27 +12,39 @@
             <parameter name="description"/>
         </in-parameters>
         <actions>
-            <script><![CDATA[
-                ec.entity.find("moqui.adk.AdkAgentConfig").condition("enabled", "Y").list().each {
-                    it.set("enabled", "N").store()
-                }
-                def existing = ec.entity.find("moqui.adk.AdkAgentConfig").condition("agentName", agentName).one()
-                if (existing) {
-                    existing.set("modelName", modelName).set("apiKey", apiKey)
-                        .set("instruction", instruction).set("description", description)
-                        .set("enabled", "Y").store()
-                } else {
-                    ec.entity.makeValue("moqui.adk.AdkAgentConfig")
-                        .setSequencedIdPrimary()
-                        .set("agentName",   agentName   ?: "MoquiAgent")
-                        .set("modelName",   modelName   ?: "gemini-2.0-flash")
-                        .set("apiKey",      apiKey)
-                        .set("instruction", instruction ?: "You are a helpful assistant for the GrowERP ERP system.")
-                        .set("description", description ?: "ADK Agent")
-                        .set("enabled", "Y")
-                        .create()
-                }
-            ]]></script>
+            <!-- Disable all currently enabled configs -->
+            <entity-find entity-name="moqui.adk.AdkAgentConfig" list="enabledList">
+                <econdition field-name="enabled" value="Y"/>
+            </entity-find>
+            <iterate list="enabledList" entry="cfg">
+                <set field="cfg.enabled" value="N"/>
+                <entity-update value-field="cfg"/>
+            </iterate>
+
+            <!-- Update existing or create new -->
+            <entity-find entity-name="moqui.adk.AdkAgentConfig" list="existingList">
+                <econdition field-name="agentName" from="agentName"/>
+            </entity-find>
+            <if condition="existingList">
+                <set field="existing" from="existingList[0]"/>
+                <set field="existing.modelName"   from="modelName"/>
+                <set field="existing.apiKey"      from="apiKey"/>
+                <set field="existing.instruction" from="instruction"/>
+                <set field="existing.description" from="description"/>
+                <set field="existing.enabled"     value="Y"/>
+                <entity-update value-field="existing"/>
+                <else>
+                    <entity-make-value entity-name="moqui.adk.AdkAgentConfig" value-field="newCfg"/>
+                    <set field="newCfg.agentName"   from="agentName   ?: 'MoquiAgent'"/>
+                    <set field="newCfg.modelName"   from="modelName   ?: 'gemini-2.0-flash'"/>
+                    <set field="newCfg.apiKey"      from="apiKey"/>
+                    <set field="newCfg.instruction" from="instruction ?: 'You are a helpful assistant for the GrowERP ERP system.'"/>
+                    <set field="newCfg.description" from="description ?: 'ADK Agent'"/>
+                    <set field="newCfg.enabled"     value="Y"/>
+                    <entity-sequenced-id-primary value-field="newCfg"/>
+                    <entity-create value-field="newCfg"/>
+                </else>
+            </if>
         </actions>
     </service>
 
@@ -59,48 +71,38 @@
             <parameter name="response"/>
         </out-parameters>
         <actions>
+            <entity-find entity-name="moqui.adk.AdkAgentConfig" list="cfgList">
+                <econdition field-name="enabled" value="Y"/>
+            </entity-find>
+            <set field="cfg" from="cfgList ? cfgList[0] : null"/>
+
             <script><![CDATA[
-                import groovy.json.JsonOutput
-                import groovy.json.JsonSlurper
-                import java.net.http.HttpClient
-                import java.net.http.HttpRequest
-                import java.net.http.HttpResponse
+                import org.moqui.util.RestClient
 
-                boolean wasDisabled = ec.artifactExecution.disableAuthz()
-                def cfg
-                try {
-                    cfg = ec.entity.find("moqui.adk.AdkAgentConfig").condition("enabled", "Y").one()
-                } finally {
-                    if (!wasDisabled) ec.artifactExecution.enableAuthz()
-                }
-
-                String apiKey   = cfg?.apiKey ?: System.getenv("GOOGLE_API_KEY") ?: System.getenv("GOOGLE_GENAI_API_KEY") ?: System.getenv("GEMINI_API_KEY") ?: ""
+                String apiKey   = cfg?.apiKey ?: System.getenv("GOOGLE_API_KEY") ?:
+                                  System.getenv("GOOGLE_GENAI_API_KEY") ?: System.getenv("GEMINI_API_KEY") ?: ""
                 String model    = cfg?.modelName ?: "gemini-2.0-flash"
                 String sysInstr = cfg?.instruction ?: ""
 
                 if (!apiKey) { response = "[Error: no API key — set one in ADK → Configuration or env GOOGLE_API_KEY]"; return }
 
-                // Retrieve or initialise session history
                 def history = org.moqui.adk.AdkSessionHolder.sessions.computeIfAbsent(sessionId, { [] })
                 history << [role: "user", parts: [[text: message]]]
 
                 def bodyMap = [contents: history]
                 if (sysInstr) bodyMap['system_instruction'] = [parts: [[text: sysInstr]]]
 
-                def client  = HttpClient.newHttpClient()
-                def request = HttpRequest.newBuilder()
-                    .uri(URI.create("https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}"))
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(JsonOutput.toJson(bodyMap)))
-                    .build()
-
-                def httpResp = client.send(request, HttpResponse.BodyHandlers.ofString())
-                def parsed   = new JsonSlurper().parseText(httpResp.body())
+                RestClient rc = ec.service.rest().method(RestClient.POST)
+                rc.uri().protocol("https").port(443)
+                    .host("generativelanguage.googleapis.com")
+                    .path("/v1beta/models/${model}:generateContent")
+                    .parameter("key", apiKey).build()
+                rc.addHeader("Content-Type", "application/json").addBodyParameters(bodyMap)
+                RestClient.RestResponse resp = rc.call()
+                def parsed = resp.jsonObject()
 
                 response = parsed?.candidates?.getAt(0)?.content?.parts?.getAt(0)?.text ?: ""
                 if (!response && parsed?.error) response = "[Gemini error: ${parsed.error.message}]"
-
-                // Append model reply to history for multi-turn context
                 if (response) history << [role: "model", parts: [[text: response]]]
             ]]></script>
         </actions>

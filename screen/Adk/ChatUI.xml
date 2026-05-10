@@ -15,11 +15,7 @@
     </transition>
     <transition name="runAgent" method="post">
         <actions><script><![CDATA[
-            import groovy.json.JsonOutput
-            import groovy.json.JsonSlurper
-            import java.net.http.HttpClient
-            import java.net.http.HttpRequest
-            import java.net.http.HttpResponse
+            import org.moqui.util.RestClient
 
             String sid = context.sessionId ?: ""
             String msg = context.message ?: ""
@@ -30,7 +26,8 @@
             try { cfg = ec.entity.find("moqui.adk.AdkAgentConfig").condition("enabled", "Y").one() }
             finally { if (!wasDisabled) ec.artifactExecution.enableAuthz() }
 
-            String apiKey  = cfg?.apiKey ?: System.getenv("GOOGLE_API_KEY") ?: System.getenv("GOOGLE_GENAI_API_KEY") ?: System.getenv("GEMINI_API_KEY") ?: ""
+            String apiKey  = cfg?.apiKey ?: System.getenv("GOOGLE_API_KEY") ?:
+                             System.getenv("GOOGLE_GENAI_API_KEY") ?: System.getenv("GEMINI_API_KEY") ?: ""
             String model   = cfg?.modelName ?: "gemini-2.0-flash"
             String sysInstr = cfg?.instruction ?: ""
             if (!apiKey) { ec.web.sendJsonResponse([errorMessage: "No API key configured — go to ADK → Configuration"]); return }
@@ -40,14 +37,14 @@
             def bodyMap = [contents: history]
             if (sysInstr) bodyMap['system_instruction'] = [parts: [[text: sysInstr]]]
 
-            def client  = HttpClient.newHttpClient()
-            def req = HttpRequest.newBuilder()
-                .uri(URI.create("https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}"))
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(JsonOutput.toJson(bodyMap)))
-                .build()
-            def httpResp = client.send(req, HttpResponse.BodyHandlers.ofString())
-            def parsed   = new JsonSlurper().parseText(httpResp.body())
+            RestClient rc = ec.service.rest().method(RestClient.POST)
+            rc.uri().protocol("https").port(443)
+                .host("generativelanguage.googleapis.com")
+                .path("/v1beta/models/${model}:generateContent")
+                .parameter("key", apiKey).build()
+            rc.addHeader("Content-Type", "application/json").addBodyParameters(bodyMap)
+            RestClient.RestResponse resp = rc.call()
+            def parsed = resp.jsonObject()
 
             String response = parsed?.candidates?.getAt(0)?.content?.parts?.getAt(0)?.text ?: ""
             if (!response && parsed?.error) response = "[Gemini error: ${parsed.error.message}]"
