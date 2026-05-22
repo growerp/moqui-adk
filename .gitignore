@@ -2,6 +2,7 @@ build/
 lib/
 .gradle/
 out/
+screen/adk-ui/
 *.ipr
 *.iws
 *.iml

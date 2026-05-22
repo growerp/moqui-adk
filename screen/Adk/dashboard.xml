@@ -27,7 +27,7 @@
                                type="p" style="${configured ? 'color:green;font-weight:bold' : 'color:red'}"/>
                     </box-body>
                     <box-toolbar>
-                        <link url="../ChatUI" text="Open Chat" btn-type="primary"/>
+                        <link url="/adk/" text="Open DevUI" btn-type="primary" url-type="plain" target-window="_blank"/>
                         <link url="../Configuration" text="Configure" btn-type="default"/>
                     </box-toolbar>
                 </container-box>

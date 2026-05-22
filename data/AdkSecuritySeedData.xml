@@ -4,13 +4,23 @@
     <!-- User group for ADK access -->
     <userGroups userGroupId="AdkUsers" description="ADK Web UI Users"/>
 
-    <!-- ADK screen group — mirrors the pattern from ToolsSecurityData.xml -->
+    <!-- ADK Moqui screen group -->
     <artifactGroups artifactGroupId="ADK_APP" description="ADK Application">
         <artifacts artifactName="component://moqui-adk/screen/Adk.xml"
                    artifactTypeEnumId="AT_XML_SCREEN" inheritAuthz="Y"/>
         <authz artifactAuthzId="ADK_APP_ADMIN" userGroupId="ADMIN"
                authzTypeEnumId="AUTHZT_ALWAYS" authzActionEnumId="AUTHZA_ALL"/>
         <authz artifactAuthzId="ADK_APP_USERS" userGroupId="AdkUsers"
+               authzTypeEnumId="AUTHZT_ALWAYS" authzActionEnumId="AUTHZA_ALL"/>
+    </artifactGroups>
+
+    <!-- ADK DevUI servlet paths (/adk and /adk/*) -->
+    <artifactGroups artifactGroupId="ADK_DEV_UI" description="ADK DevUI Servlet">
+        <artifacts artifactName="/adk"  artifactTypeEnumId="AT_REST_PATH" inheritAuthz="Y"/>
+        <artifacts artifactName="/adk/*" artifactTypeEnumId="AT_REST_PATH" inheritAuthz="Y"/>
+        <authz artifactAuthzId="ADK_DEV_UI_ADMIN" userGroupId="ADMIN"
+               authzTypeEnumId="AUTHZT_ALWAYS" authzActionEnumId="AUTHZA_ALL"/>
+        <authz artifactAuthzId="ADK_DEV_UI_USERS" userGroupId="AdkUsers"
                authzTypeEnumId="AUTHZT_ALWAYS" authzActionEnumId="AUTHZA_ALL"/>
     </artifactGroups>
 

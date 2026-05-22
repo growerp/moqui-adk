@@ -18,4 +18,16 @@ import java.util.concurrent.ConcurrentHashMap
 /** In-memory conversation history store. Keyed by sessionId. Resets on Moqui restart. */
 class AdkSessionHolder {
     static final ConcurrentHashMap<String, List<Map>> sessions = new ConcurrentHashMap<>()
+    static final ConcurrentHashMap<String, List<Map>> events = new ConcurrentHashMap<>()
+
+    static void logEvent(String sessionId, String type, String summary, Map details) {
+        if (!sessionId) return
+        def list = events.computeIfAbsent(sessionId, { new java.util.concurrent.CopyOnWriteArrayList<Map>() })
+        list.add([
+            timestamp: new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS").format(new Date()),
+            type: type,
+            summary: summary,
+            details: details ?: [:]
+        ])
+    }
 }

@@ -21,8 +21,9 @@
                     <box-body>
                         <form-single name="AdkConfigForm" transition="updateConfig">
                             <field name="agentName">
-                                <default-field title="Agent Name">
-                                    <text-line size="40" default-value="${configValue?.agentName ?: 'MoquiAgent'}"/>
+                                <default-field title="Agent Name"
+                                    tooltip="Leave blank to use the built-in HelloTime example agent">
+                                    <text-line size="40" default-value="${configValue?.agentName ?: ''}"/>
                                 </default-field>
                             </field>
                             <field name="modelName">

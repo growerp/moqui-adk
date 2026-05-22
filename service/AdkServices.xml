@@ -3,9 +3,9 @@
           xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
 
     <service verb="update" noun="AgentConfig">
-        <description>Save ADK agent configuration.</description>
+        <description>Save ADK agent configuration and (re)initialise the ADK runner.</description>
         <in-parameters>
-            <parameter name="agentName"   default-value="MoquiAgent"/>
+            <parameter name="agentName"/>
             <parameter name="modelName"   default-value="gemini-2.0-flash"/>
             <parameter name="apiKey"      required="true"/>
             <parameter name="instruction"/>
@@ -45,24 +45,63 @@
                     <entity-create value-field="newCfg"/>
                 </else>
             </if>
+
+            <!-- (Re)initialise the ADK runner with the new configuration.
+                 Passing null agentName uses HelloTimeAgent as default. -->
+            <script><![CDATA[
+                org.moqui.adk.AdkManager.init(
+                    agentName ?: null,
+                    modelName ?: 'gemini-2.0-flash',
+                    instruction ?: '',
+                    apiKey
+                )
+            ]]></script>
         </actions>
     </service>
 
     <service verb="create" noun="Session" authenticate="true">
-        <description>Create a new chat session for the current user.</description>
+        <description>Create a new ADK chat session for the current user.</description>
         <out-parameters>
             <parameter name="sessionId"/>
         </out-parameters>
         <actions>
             <script><![CDATA[
-                sessionId = UUID.randomUUID().toString()
-                org.moqui.adk.AdkSessionHolder.sessions[sessionId] = []
+                import org.moqui.adk.AdkManager
+                import org.moqui.adk.AdkSessionHolder
+
+                // Lazy-init ADK runner from saved config if not yet started
+                if (!AdkManager.isInitialized()) {
+                    boolean wasDisabled = ec.artifactExecution.disableAuthz()
+                    def cfg
+                    try { cfg = ec.entity.find('moqui.adk.AdkAgentConfig').condition('enabled','Y').one() }
+                    finally { if (!wasDisabled) ec.artifactExecution.enableAuthz() }
+
+                    if (cfg) {
+                        AdkManager.init(cfg.agentName, cfg.modelName, cfg.instruction, cfg.apiKey)
+                    } else {
+                        String envKey = System.getenv('GOOGLE_API_KEY') ?:
+                                        System.getenv('GOOGLE_GENAI_API_KEY') ?:
+                                        System.getenv('GEMINI_API_KEY') ?: ''
+                        if (envKey) AdkManager.init(null, 'gemini-2.0-flash', '', envKey)
+                    }
+                }
+
+                if (!AdkManager.isInitialized()) {
+                    ec.message.addError('ADK not configured — add API key in ADK → Configuration')
+                    return
+                }
+
+                def adkSession = AdkManager.createSession(ec.user.userId ?: 'anonymous')
+                sessionId = adkSession.id as String
+                // Mirror in AdkSessionHolder so the ChatUI inspector panel keeps working
+                AdkSessionHolder.sessions[sessionId] = []
+                AdkSessionHolder.logEvent(sessionId, 'session_created', 'Session created', [sessionId: sessionId])
             ]]></script>
         </actions>
     </service>
 
     <service verb="run" noun="Agent" authenticate="true">
-        <description>Send a message to the Gemini agent and return its reply.</description>
+        <description>Send a message to the ADK agent and return its text reply.</description>
         <in-parameters>
             <parameter name="sessionId" required="true"/>
             <parameter name="message"   required="true"/>
@@ -71,40 +110,40 @@
             <parameter name="response"/>
         </out-parameters>
         <actions>
-            <entity-find entity-name="moqui.adk.AdkAgentConfig" list="cfgList">
-                <econdition field-name="enabled" value="Y"/>
-            </entity-find>
-            <set field="cfg" from="cfgList ? cfgList[0] : null"/>
-
             <script><![CDATA[
-                import org.moqui.util.RestClient
+                import org.moqui.adk.AdkManager
+                import org.moqui.adk.AdkSessionHolder
 
-                String apiKey   = cfg?.apiKey ?: System.getenv("GOOGLE_API_KEY") ?:
-                                  System.getenv("GOOGLE_GENAI_API_KEY") ?: System.getenv("GEMINI_API_KEY") ?: ""
-                String model    = cfg?.modelName ?: "gemini-2.0-flash"
-                String sysInstr = cfg?.instruction ?: ""
+                // Lazy-init ADK runner from saved config if not yet started
+                if (!AdkManager.isInitialized()) {
+                    boolean wasDisabled = ec.artifactExecution.disableAuthz()
+                    def cfg
+                    try { cfg = ec.entity.find('moqui.adk.AdkAgentConfig').condition('enabled','Y').one() }
+                    finally { if (!wasDisabled) ec.artifactExecution.enableAuthz() }
 
-                if (!apiKey) { response = "[Error: no API key — set one in ADK → Configuration or env GOOGLE_API_KEY]"; return }
+                    if (cfg) {
+                        AdkManager.init(cfg.agentName, cfg.modelName, cfg.instruction, cfg.apiKey)
+                    } else {
+                        String envKey = System.getenv('GOOGLE_API_KEY') ?:
+                                        System.getenv('GOOGLE_GENAI_API_KEY') ?:
+                                        System.getenv('GEMINI_API_KEY') ?: ''
+                        if (envKey) AdkManager.init(null, 'gemini-2.0-flash', '', envKey)
+                    }
+                }
 
-                def history = org.moqui.adk.AdkSessionHolder.sessions.computeIfAbsent(sessionId, { [] })
-                history << [role: "user", parts: [[text: message]]]
+                if (!AdkManager.isInitialized()) {
+                    response = '[Error: ADK not configured — add API key in ADK → Configuration]'
+                    return
+                }
 
-                def bodyMap = [contents: history]
-                if (sysInstr) bodyMap['system_instruction'] = [parts: [[text: sysInstr]]]
+                AdkSessionHolder.logEvent(sessionId, 'user_message', 'User message', [message: message])
 
-                RestClient rc = ec.service.rest().method(RestClient.POST)
-                rc.uri().protocol("https").port(443)
-                    .host("generativelanguage.googleapis.com")
-                    .path("/v1beta/models/${model}:generateContent")
-                    .parameter("key", apiKey).build()
-                rc.addHeader("Content-Type", "application/json")
-                rc.text(groovy.json.JsonOutput.toJson(bodyMap))
-                RestClient.RestResponse resp = rc.call()
-                def parsed = resp.jsonObject()
+                def events = AdkManager.runAgent(ec.user.userId ?: 'anonymous', sessionId, message)
+                def textEvent = events.reverse().find { it.content?.parts }
+                response = textEvent?.content?.parts?.find { it.text }?.text ?: ''
 
-                response = parsed?.candidates?.getAt(0)?.content?.parts?.getAt(0)?.text ?: ""
-                if (!response && parsed?.error) response = "[Gemini error: ${parsed.error.message}]"
-                if (response) history << [role: "model", parts: [[text: response]]]
+                if (!response) response = '[No response from agent]'
+                AdkSessionHolder.logEvent(sessionId, 'agent_response', 'Agent replied', [response: response])
             ]]></script>
         </actions>
     </service>
