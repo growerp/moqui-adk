@@ -2,16 +2,21 @@
 <services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
           xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
 
-    <service verb="update" noun="AgentConfig">
+    <service verb="update" noun="AgentConfig" authenticate="true">
         <description>Save (or create) an ADK agent config and register it in the runtime registry.
-            Multiple configs can be active simultaneously — one per ownerPartyId (tenant).</description>
+            Multiple configs can be active simultaneously — one per ownerPartyId (tenant).
+            Authentication is enforced at the servlet level (/adk/* requires AdkUsers/ADMIN).</description>
         <in-parameters>
             <parameter name="ownerPartyId"/>
             <parameter name="agentName"/>
             <parameter name="modelName"   default-value="gemini-2.0-flash"/>
-            <parameter name="apiKey"      required="true"/>
+            <parameter name="apiKey"/>
             <parameter name="instruction"/>
             <parameter name="description"/>
+            <parameter name="scheduleExpression"/>
+            <parameter name="scheduleEnabled"    default-value="N"/>
+            <parameter name="schedulePrompt"/>
+            <parameter name="scheduleChatRoomId"/>
         </in-parameters>
         <out-parameters>
             <parameter name="adkAgentConfigId"/>
@@ -24,39 +29,50 @@
             </entity-find>
             <if condition="existingList">
                 <set field="existing" from="existingList[0]"/>
-                <set field="existing.modelName"   from="modelName"/>
-                <set field="existing.apiKey"      from="apiKey"/>
-                <set field="existing.instruction" from="instruction"/>
-                <set field="existing.description" from="description"/>
-                <set field="existing.ownerPartyId" from="ownerPartyId"/>
-                <set field="existing.enabled"     value="Y"/>
+                <set field="existing.modelName"          from="modelName"/>
+                <if condition="apiKey"><set field="existing.apiKey" from="apiKey"/></if>
+                <set field="existing.instruction"        from="instruction"/>
+                <set field="existing.description"        from="description"/>
+                <set field="existing.ownerPartyId"       from="ownerPartyId"/>
+                <set field="existing.enabled"            value="Y"/>
+                <set field="existing.scheduleExpression" from="scheduleExpression"/>
+                <set field="existing.scheduleEnabled"    from="scheduleEnabled"/>
+                <set field="existing.schedulePrompt"     from="schedulePrompt"/>
+                <set field="existing.scheduleChatRoomId" from="scheduleChatRoomId"/>
                 <entity-update value-field="existing"/>
                 <set field="adkAgentConfigId" from="existing.adkAgentConfigId"/>
                 <else>
                     <entity-make-value entity-name="moqui.adk.AdkAgentConfig" value-field="newCfg"/>
-                    <set field="newCfg.ownerPartyId"  from="ownerPartyId"/>
-                    <set field="newCfg.agentName"     from="agentName    ?: 'MoquiAgent'"/>
-                    <set field="newCfg.modelName"     from="modelName    ?: 'gemini-2.0-flash'"/>
-                    <set field="newCfg.apiKey"        from="apiKey"/>
-                    <set field="newCfg.instruction"   from="instruction  ?: 'You are a helpful assistant for the GrowERP ERP system.'"/>
-                    <set field="newCfg.description"   from="description  ?: 'ADK Agent'"/>
-                    <set field="newCfg.enabled"       value="Y"/>
+                    <set field="newCfg.ownerPartyId"       from="ownerPartyId"/>
+                    <set field="newCfg.agentName"          from="agentName    ?: 'MoquiAgent'"/>
+                    <set field="newCfg.modelName"          from="modelName    ?: 'gemini-2.0-flash'"/>
+                    <set field="newCfg.apiKey"             from="apiKey"/>
+                    <set field="newCfg.instruction"        from="instruction  ?: 'You are a helpful assistant for the GrowERP ERP system.'"/>
+                    <set field="newCfg.description"        from="description  ?: 'ADK Agent'"/>
+                    <set field="newCfg.enabled"            value="Y"/>
+                    <set field="newCfg.scheduleExpression" from="scheduleExpression"/>
+                    <set field="newCfg.scheduleEnabled"    from="scheduleEnabled ?: 'N'"/>
+                    <set field="newCfg.schedulePrompt"     from="schedulePrompt"/>
+                    <set field="newCfg.scheduleChatRoomId" from="scheduleChatRoomId"/>
                     <entity-sequenced-id-primary value-field="newCfg"/>
                     <entity-create value-field="newCfg"/>
                     <set field="adkAgentConfigId" from="newCfg.adkAgentConfigId"/>
                 </else>
             </if>
 
-            <!-- Ensure persistent session service is wired before registering the config -->
+            <!-- Re-read persisted record so initConfig always has the final apiKey -->
+            <entity-find-one entity-name="moqui.adk.AdkAgentConfig" value-field="savedCfg">
+                <field-map field-name="adkAgentConfigId"/>
+            </entity-find-one>
             <script><![CDATA[
                 org.moqui.adk.AdkManager.initSessionService(ec.factory)
                 org.moqui.adk.AdkManager.initConfig(
                     adkAgentConfigId,
-                    ownerPartyId ?: null,
-                    agentName    ?: null,
-                    modelName    ?: 'gemini-2.0-flash',
-                    instruction  ?: '',
-                    apiKey
+                    savedCfg.ownerPartyId ?: null,
+                    savedCfg.agentName    ?: null,
+                    savedCfg.modelName    ?: 'gemini-2.0-flash',
+                    savedCfg.instruction  ?: '',
+                    savedCfg.apiKey       ?: ''
                 )
             ]]></script>
         </actions>

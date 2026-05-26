@@ -11,7 +11,11 @@
         <field name="apiKey"      type="text-medium"/>
         <field name="instruction" type="text-long"/>
         <field name="description" type="text-short"/>
-        <field name="enabled"     type="text-indicator"/>
+        <field name="enabled"          type="text-indicator"/>
+        <field name="scheduleExpression" type="text-short"/>
+        <field name="scheduleEnabled"    type="text-indicator"/>
+        <field name="schedulePrompt"     type="text-medium"/>
+        <field name="scheduleChatRoomId" type="id"/>
     </entity>
 
     <!-- Persistent ADK sessions (replaces in-memory InMemorySessionService) -->

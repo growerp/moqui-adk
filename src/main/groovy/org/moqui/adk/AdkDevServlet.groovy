@@ -82,6 +82,14 @@ class AdkDevServlet extends HttpServlet {
             handleRun(req, resp, true)
             return
         }
+        if (pathInfo == '/configs' || pathInfo == '/configs/') {
+            handleConfigs(pathInfo, method, req, resp)
+            return
+        }
+        if (pathInfo.startsWith('/configs/')) {
+            handleConfigs(pathInfo, method, req, resp)
+            return
+        }
 
         // ── Static SPA assets ─────────────────────────────────────────────────
         serveStatic(pathInfo, resp)
@@ -150,6 +158,118 @@ class AdkDevServlet extends HttpServlet {
             )
         } else {
             json(resp, AdkManager.runAgent(userId, sid, text))
+        }
+    }
+
+    // ── Agent config CRUD (/adk/configs) ─────────────────────────────────────
+
+    private void handleConfigs(String path, String method, HttpServletRequest req, HttpServletResponse resp) {
+        ExecutionContextFactory ecf = ecf(req)
+
+        // Read POST body FIRST — initWebFacade internally calls getReader(),
+        // and Jetty forbids mixing getReader() with getInputStream().
+        String rawBody = (method == 'POST') ? req.reader.text : null
+
+        // configId from path: /configs/{configId}
+        String[] parts = path.split('/')
+        String configId = parts.length > 2 ? parts[2] : null
+
+        def ec = ecf.getExecutionContext()
+        try {
+            // Authenticate the caller from HTTP headers (api_key / moquiSessionToken).
+            // Body is already consumed above so getReader() inside initWebFacade is safe.
+            if (ec.getWebImpl() == null) {
+                try {
+                    ec.initWebFacade(req.servletContext.getInitParameter('moqui-name') ?: 'webroot', req, resp)
+                } catch (Exception ignored) {}
+            }
+
+            // Resolve ownerPartyId for tenant-scoping
+            String ownerPartyId = null
+            if (ec.user?.userId) {
+                try {
+                    boolean wasDisabled = ec.artifactExecution.disableAuthz()
+                    try {
+                        def userAcct = ec.entity.find('moqui.security.UserAccount')
+                            .condition('userId', ec.user.userId)
+                            .selectField('partyId').one()
+                        String userPartyId = userAcct?.partyId
+                        if (userPartyId) {
+                            def userParty = ec.entity.find('mantle.party.Party')
+                                .condition('partyId', userPartyId)
+                                .selectField('ownerPartyId').one()
+                            ownerPartyId = userParty?.ownerPartyId ?: null
+                        }
+                    } finally { if (!wasDisabled) ec.artifactExecution.enableAuthz() }
+                } catch (Exception ignored) {}
+            }
+
+            switch (method) {
+                case 'GET':
+                    boolean wasDisabled = ec.artifactExecution.disableAuthz()
+                    try {
+                        def find = ec.entity.find('moqui.adk.AdkAgentConfig')
+                        if (ownerPartyId) find = find.condition('ownerPartyId', ownerPartyId)
+                        def list = find.list().collect { cfg ->
+                            [adkAgentConfigId   : cfg.adkAgentConfigId,
+                             agentName          : cfg.agentName,
+                             modelName          : cfg.modelName,
+                             instruction        : cfg.instruction,
+                             description        : cfg.description,
+                             enabled            : cfg.enabled,
+                             scheduleExpression : cfg.scheduleExpression,
+                             scheduleEnabled    : cfg.scheduleEnabled,
+                             schedulePrompt     : cfg.schedulePrompt,
+                             scheduleChatRoomId : cfg.scheduleChatRoomId]
+                        }
+                        json(resp, list)
+                    } finally { if (!wasDisabled) ec.artifactExecution.enableAuthz() }
+                    break
+
+                case 'POST':
+                    def body = new JsonSlurper().parseText(rawBody ?: '{}') as Map
+                    Map params = [
+                        ownerPartyId      : ownerPartyId ?: body.ownerPartyId,
+                        agentName         : body.agentName,
+                        modelName         : body.modelName ?: 'gemini-2.5-flash',
+                        instruction       : body.instruction,
+                        description       : body.description,
+                        scheduleExpression: body.scheduleExpression,
+                        scheduleEnabled   : body.scheduleEnabled ?: 'N',
+                        schedulePrompt    : body.schedulePrompt,
+                        scheduleChatRoomId: body.scheduleChatRoomId,
+                    ]
+                    if (body.apiKey) params.apiKey = body.apiKey
+                    // Servlet already enforces AdkUsers/ADMIN access; skip redundant
+                    // artifact-level authz check so the call runs as the authenticated user.
+                    boolean wasDisabledPost = ec.artifactExecution.disableAuthz()
+                    Map result
+                    try {
+                        result = ec.service.sync()
+                            .name('AdkServices.update#AgentConfig')
+                            .parameters(params).call()
+                    } finally { if (!wasDisabledPost) ec.artifactExecution.enableAuthz() }
+                    json(resp, [adkAgentConfigId: result.adkAgentConfigId])
+                    break
+
+                case 'DELETE':
+                    if (!configId) { resp.sendError(400, 'configId required'); return }
+                    boolean wasDisabled2 = ec.artifactExecution.disableAuthz()
+                    try {
+                        def cfg = ec.entity.find('moqui.adk.AdkAgentConfig')
+                            .condition('adkAgentConfigId', configId).one()
+                        if (!cfg) { resp.sendError(404); return }
+                        cfg.delete()
+                        resp.status = 200
+                        json(resp, [deleted: configId])
+                    } finally { if (!wasDisabled2) ec.artifactExecution.enableAuthz() }
+                    break
+
+                default:
+                    resp.sendError(405)
+            }
+        } finally {
+            ec.destroy()
         }
     }
 

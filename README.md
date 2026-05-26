@@ -12,6 +12,8 @@ A native Moqui component that integrates the [Google ADK Java SDK](https://githu
 - **Google ADK Java SDK** — `LlmAgent` + `Runner` handle agent execution and session management
 - **Persistent sessions** — conversation history and session state survive Moqui restarts (stored in `AdkSession` / `AdkSessionEvent` entities)
 - **Multi-tenant agents** — each company (`ownerPartyId`) can have its own agent config running simultaneously
+- **Dynamic agent creation** — create, edit, and delete named agents at runtime via REST API (`/adk/configs`) or the Flutter `AdkAgentListView` UI — no restart required
+- **Scheduled agents** — give an agent a cron expression and it runs automatically, posting results to a GrowERP chat room
 - **Moqui MCP tools** — every agent is wired to the [moqui-mcp](../moqui-mcp) Model Context Protocol tools, so agents can search and execute Moqui services (and browse screens) to answer real ERP questions
 - **Default `growerp-agent`** — used when no custom agent is configured: a GrowERP/Moqui assistant with the Moqui MCP tools plus a `getCurrentTime` example tool
 - **Moqui dashboard** — status overview and configuration screen at `/vapps/adk/`
@@ -78,6 +80,8 @@ The component produces a single JAR: `lib/moqui-adk-1.0.0.jar` (~30 KB).
 java -jar moqui.war load types=seed,seed-initial,install no-run-es
 ```
 
+This registers the `AdkScheduledAgents` ServiceJob (cron every minute) and security seed data.
+
 ### 4. Start Moqui
 
 ```bash
@@ -122,6 +126,124 @@ The default `growerp-agent` is used automatically. No UI config needed.
 
 Config takes effect immediately (no restart). Multiple configs can be active simultaneously — one per tenant. DB config takes priority over env vars.
 
+### Option C — Flutter `AdkAgentListView` (recommended for end-users)
+
+The Flutter `growerp_core` package ships a ready-made management screen. Push it onto the navigator stack or add it to your route table:
+
+```dart
+// Route table
+GoRoute(path: '/adk/agents', builder: (_, __) => const AdkAgentListView())
+
+// Or push directly
+Navigator.push(context, MaterialPageRoute(
+  builder: (_) => const AdkAgentListView(),
+));
+```
+
+The screen lets users:
+- **List** all agents for their tenant
+- **Create** a new named agent with a custom system prompt, model, optional API key, and optional schedule
+- **Edit** an existing agent's configuration (API key only updated when a new one is entered)
+- **Delete** an agent
+
+All changes take effect immediately on the backend — no restart required.
+
+---
+
+## Dynamic Agent Creation
+
+Any named agent can be created at runtime without redeploying Moqui. The `update#AgentConfig` service upserts an `AdkAgentConfig` record and calls `AdkManager.initConfig()` to register a new `Runner` + `LlmAgent` in the live registry.
+
+### Via Flutter UI
+
+Use `AdkAgentListView` (see Configuration → Option C above).
+
+### Via the REST API directly
+
+```bash
+# Create a new agent
+POST /adk/configs
+Content-Type: application/json
+Authorization: Bearer <token>
+
+{
+  "agentName":   "sales-agent",
+  "modelName":   "gemini-2.0-flash",
+  "instruction": "You are a sales assistant. Help users find products and place orders.",
+  "apiKey":      "AIza..."          # optional — omit to reuse server default
+}
+# → { "adkAgentConfigId": "10001" }
+
+# List agents for the authenticated tenant
+GET /adk/configs
+
+# Delete an agent
+DELETE /adk/configs/10001
+```
+
+Once created, the agent is immediately available at `/adk/apps/sales-agent/…` and in the DevUI dropdown.
+
+To update an existing agent, `POST /adk/configs` again with the same `agentName`. Omitting `apiKey` preserves the stored key.
+
+### Via Moqui service call (e.g. from screen actions, Camel routes, scripts)
+
+```
+service: moqui.adk.AdkServices.update#AgentConfig
+  agentName:   "sales-agent"
+  modelName:   "gemini-2.0-flash"
+  instruction: "You are a sales assistant…"
+  ownerPartyId: "PARTY_001"   # optional — scopes agent to one tenant
+  apiKey:       "AIza…"       # optional — omit to reuse existing/env key
+```
+
+---
+
+## Scheduled Agents
+
+An agent can be given a cron schedule. Every minute, the `AdkScheduledAgents` ServiceJob fires `run#AllScheduledAgents`, which finds all agents with `scheduleEnabled = Y` and runs each one asynchronously. The result is posted as a message to the configured GrowERP chat room.
+
+### "Time every minute" example
+
+1. Create an agent via the Flutter dialog or REST API:
+
+```json
+{
+  "agentName":          "TimeBot",
+  "instruction":        "When asked, report the current time clearly.",
+  "scheduleEnabled":    "Y",
+  "scheduleExpression": "0 * * * * ?",
+  "schedulePrompt":     "What is the current time?",
+  "scheduleChatRoomId": "<your-chat-room-id>"
+}
+```
+
+2. Every minute, Moqui runs `TimeBot` with the prompt `"What is the current time?"` and posts the reply to the specified chat room.
+
+### Schedule fields on `AdkAgentConfig`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `scheduleExpression` | text-short | Quartz cron expression (e.g. `0 * * * * ?` = every minute, `0 0 9 * * ?` = daily at 9am) |
+| `scheduleEnabled` | Y/N | Whether the schedule is active |
+| `schedulePrompt` | text-medium | Prompt sent to the agent on each scheduled run. Defaults to `"Perform your scheduled task."` |
+| `scheduleChatRoomId` | id | GrowERP `ChatRoom.chatRoomId` to post results to. If blank, the result is only logged. |
+
+### How it works
+
+```
+Moqui Quartz — every minute
+  → run#AllScheduledAgents
+      finds all AdkAgentConfig where scheduleEnabled=Y and enabled=Y
+      → async: run#ScheduledAgent(adkAgentConfigId)
+                  create one-off ADK session (userId='scheduler')
+                  AdkManager.runAgent(prompt)
+                  if scheduleChatRoomId set:
+                    create#growerp.general.ChatMessage(chatRoomId, content=result)
+                  else: log result
+```
+
+The ServiceJob is registered by `data/AdkSchedulerData.xml` (loaded during `seed` data load). The job respects Moqui's scheduler pause/resume via the `paused` field on the `ServiceJob` record.
+
 ---
 
 ## Usage
@@ -130,7 +252,7 @@ Config takes effect immediately (no restart). Multiple configs can be active sim
 
 Navigate to `http://localhost:8080/adk/` — the official Google ADK Angular interface:
 
-1. Select **growerp-agent** from the dropdown (or your custom agent if configured)
+1. Select **growerp-agent** (or any custom agent) from the dropdown
 2. Click **+ New Session**
 3. Type a message, e.g. `list product services` or `What time is it in Tokyo?`
 4. The agent calls the Moqui MCP tools (or `getCurrentTime`) and replies via Gemini
@@ -148,15 +270,18 @@ Navigate to `http://localhost:8080/vapps` → **ADK → Dashboard** — shows ag
 ## Architecture
 
 ```
-Browser
+Browser / Flutter
   │
   ├── GET  /adk/              → Angular DevUI (index.html)
   ├── GET  /adk/main-*.js     → Angular static assets
   │
   ├── GET  /adk/list-apps     ─┐
   ├── POST /adk/apps/…/sessions│ AdkDevServlet (Jakarta Servlet)
-  ├── POST /adk/run_sse       ─┘    │
-  │                                 ▼
+  ├── POST /adk/run_sse        │
+  ├── GET  /adk/configs        │  ← dynamic agent management
+  ├── POST /adk/configs        │
+  ├── DEL  /adk/configs/{id}  ─┘
+  │                                 │
   │                         AdkManager (Groovy singleton)
   │                         registry: configId → Runner
   │                         tenantRegistry: ownerPartyId → configId
@@ -173,6 +298,13 @@ Browser
   │                       Gemini API (google.generativeai)
   │
   └── /vapps/adk/*         → Moqui screens (dashboard, configuration)
+
+Moqui Quartz scheduler (every minute)
+  → AdkScheduledAgents ServiceJob
+      → run#AllScheduledAgents
+          → run#ScheduledAgent (per scheduleEnabled=Y config)
+              → AdkManager.runAgent(schedulePrompt)
+              → create#growerp.general.ChatMessage (→ chat room WebSocket)
 ```
 
 ### Session persistence
@@ -190,7 +322,7 @@ ADK Java 1.3.0 ships only `InMemorySessionService` and `VertexAiSessionService`.
 
 | File | Role |
 |------|------|
-| `src/…/AdkDevServlet.groovy` | Jakarta Servlet at `/adk` and `/adk/*` — serves Angular SPA + ADK REST API |
+| `src/…/AdkDevServlet.groovy` | Jakarta Servlet at `/adk` and `/adk/*` — serves Angular SPA, ADK REST API, and `/adk/configs` CRUD |
 | `src/…/AdkManager.groovy` | Registry facade: multi-agent `configId→Runner` map, tenant routing, session ownership |
 | `src/…/MoquiSessionService.groovy` | Persistent `BaseSessionService` backed by `AdkSession` + `AdkSessionEvent` entities |
 | `src/…/HelloTimeAgent.groovy` | Example agent — tells current time for a city using a function tool |
@@ -199,10 +331,12 @@ ADK Java 1.3.0 ships only `InMemorySessionService` and `VertexAiSessionService`.
 | `screen/Adk/dashboard.xml` | Moqui status dashboard |
 | `screen/Adk/Configuration.xml` | Agent config form |
 | `service/AdkServices.xml` | `update#AgentConfig`, `create#Session`, `run#Agent` Moqui services |
-| `entity/AdkEntities.xml` | `AdkAgentConfig`, `AdkSession`, `AdkSessionEvent` entities |
+| `service/AdkSchedulerServices.xml` | `run#AllScheduledAgents`, `run#ScheduledAgent` — scheduled execution + chat delivery |
+| `entity/AdkEntities.xml` | `AdkAgentConfig` (+ schedule fields), `AdkSession`, `AdkSessionEvent` entities |
 | `MoquiConf.xml` | Servlet registration + screen facade |
 | `build.gradle` | `extractAdkBrowserAssets` task + `adkDevAssets` configuration |
 | `data/AdkSecuritySeedData.xml` | Auth rules for `/adk/*` + `AdkUsers` user group |
+| `data/AdkSchedulerData.xml` | `AdkScheduledAgents` ServiceJob seed (cron every minute) |
 
 ### ADK REST API (implemented by AdkDevServlet)
 
@@ -215,6 +349,9 @@ ADK Java 1.3.0 ships only `InMemorySessionService` and `VertexAiSessionService`.
 | `DELETE` | `/adk/apps/{app}/users/{uid}/sessions/{sid}` | Delete session + events |
 | `POST` | `/adk/run` | Synchronous run — returns JSON event array |
 | `POST` | `/adk/run_sse` | Streaming run — Server-Sent Events |
+| `GET` | `/adk/configs` | List agent configs for the authenticated tenant |
+| `POST` | `/adk/configs` | Create or update an agent config (upsert by agentName) |
+| `DELETE` | `/adk/configs/{configId}` | Delete an agent config |
 
 ---
 
@@ -237,11 +374,15 @@ Try asking: `list product services`, `What time is it in London?`, or `who am I?
 
 ## Adding a Custom Agent
 
-### Single global agent
+### Single global agent (Moqui Admin UI)
 
 Go to **ADK → Configuration**, enter a custom **Agent Name**, **Model**, **API Key**, and **System Instruction**, then save. The runner reinitializes immediately. Leave **Owner Party ID** blank to apply globally.
 
 For an agent with custom Groovy tools, extend `AdkManager.initConfig()` to detect your agent name and wire in your `LlmAgent` with `FunctionTool` entries.
+
+### Dynamic agents at runtime (no code changes)
+
+Use the Flutter `AdkAgentListView` or `POST /adk/configs` — see [Dynamic Agent Creation](#dynamic-agent-creation) above.
 
 ### Per-tenant agents (multi-company)
 
@@ -264,7 +405,7 @@ Each tenant's users will be routed to their own `Runner` + `LlmAgent` instance. 
 
 | Entity | Purpose |
 |--------|---------|
-| `moqui.adk.AdkAgentConfig` | Agent config: ownerPartyId, name, model, API key, instruction, enabled flag |
+| `moqui.adk.AdkAgentConfig` | Agent config: ownerPartyId, name, model, API key, instruction, enabled flag, schedule fields (`scheduleExpression`, `scheduleEnabled`, `schedulePrompt`, `scheduleChatRoomId`) |
 | `moqui.adk.AdkSession` | Persistent session: userId, configId, state JSON, timestamps |
 | `moqui.adk.AdkSessionEvent` | Individual event/message JSON for a session (ordered by eventTime) |
 
@@ -282,7 +423,7 @@ The servlet isn't responding. Check:
 
 ### Error: "API key must either be provided…"
 
-No API key configured. Set `GOOGLE_API_KEY` env var or configure via **ADK → Configuration**.
+No API key configured. Set `GOOGLE_API_KEY` env var or configure via **ADK → Configuration** or `POST /adk/configs`.
 
 ### Agent listed but session creation fails (503)
 
@@ -312,9 +453,35 @@ Sessions are now persisted by default via `MoquiSessionService`. If sessions are
 - `AdkSession` and `AdkSessionEvent` tables exist (re-run `load types=seed,seed-initial,install`)
 - No DB errors in Moqui log when `appendEvent` is called
 
+### Scheduled agent not running
+
+Check:
+- Seed data was loaded (`AdkScheduledAgents` row exists in `moqui.service.job.ServiceJob`)
+- `scheduleEnabled = Y` and `enabled = Y` on the `AdkAgentConfig` record
+- Moqui scheduler is active (check `moqui-conf.xml` for `<service-facade scheduler-thread-count="..." />`)
+- Moqui log for `AdkScheduler:` lines
+
+### Scheduled result not appearing in chat room
+
+Check:
+- `scheduleChatRoomId` is set on the config and refers to a valid `growerp.general.ChatRoom` record
+- At least one `ChatRoomMember` exists for that room (the service uses the first member as `fromUserId`)
+- Moqui log for `AdkScheduler: no fromUserId resolved…` warnings
+
 ---
 
 ## Development
+
+### ADK class patches
+
+The `patches/` directory contains compiled `.class` files that override classes in the embedded `google-adk` JAR (e.g. `Runner`, `McpToolset`, `SseServerParameters`). These cannot live in the component `lib/` — they must be on the JVM classpath **before** the WAR's own JARs, which means they must sit in the Moqui working directory (next to `moqui.war`) so that `java -cp . moqui.war` picks them up first.
+
+The `copyAdkPatches` Gradle task (run automatically as part of `jar`) copies them there:
+
+```bash
+cd moqui
+./gradlew :runtime:component:moqui-adk:copyAdkPatches
+```
 
 ### Rebuild after Groovy changes
 
@@ -324,7 +491,7 @@ cd moqui
 # restart Moqui to pick up the new JAR
 ```
 
-Screen XML and service XML hot-reload without rebuild.
+Screen XML, service XML, and data XML hot-reload without rebuild.
 
 ### Rebuild the full WAR (framework changes)
 

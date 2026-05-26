@@ -94,8 +94,26 @@ task extractAdkBrowserAssets {
     }
 }
 
+// Copy ADK class patches to the Moqui working directory (next to moqui.war).
+// These override classes in the embedded google-adk JAR. They must be on the
+// JVM classpath before the WAR (via `java -cp . moqui.war`), so they cannot
+// live in the component lib/ — they must be in the working directory itself.
+task copyAdkPatches {
+    description = 'Copy ADK class patches to the Moqui working directory'
+    def patchesDir = file(projectDir.absolutePath + '/patches')
+    inputs.dir patchesDir
+    outputs.dir file("${moquiDir}/com")
+    doLast {
+        copy {
+            from fileTree(dir: patchesDir)
+            into moquiDir
+        }
+    }
+}
+
 jar {
     destinationDirectory = file(projectDir.absolutePath + '/lib')
     archiveBaseName = jarBaseName
 }
 jar.dependsOn extractAdkBrowserAssets
+jar.dependsOn copyAdkPatches

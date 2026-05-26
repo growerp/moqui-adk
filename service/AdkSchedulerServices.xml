@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
+
+    <!-- Called by ServiceJob every minute — runs all agents with scheduleEnabled=Y -->
+    <service verb="run" noun="AllScheduledAgents" authenticate="anonymous">
+        <description>Iterate all enabled scheduled ADK agent configs and run each one.</description>
+        <actions>
+            <entity-find entity-name="moqui.adk.AdkAgentConfig" list="cfgList">
+                <econdition field-name="scheduleEnabled" value="Y"/>
+                <econdition field-name="enabled"         value="Y"/>
+            </entity-find>
+            <iterate list="cfgList" entry="cfg">
+                <service-call name="AdkSchedulerServices.run#ScheduledAgent"
+                    in-map="[adkAgentConfigId: cfg.adkAgentConfigId]" async="true"/>
+            </iterate>
+        </actions>
+    </service>
+
+    <!-- Run a single scheduled agent and post result to its chat room -->
+    <service verb="run" noun="ScheduledAgent" authenticate="anonymous">
+        <description>Run one scheduled ADK agent turn and deliver the result to the configured chat room.</description>
+        <in-parameters>
+            <parameter name="adkAgentConfigId" required="true"/>
+        </in-parameters>
+        <actions>
+            <entity-find-one entity-name="moqui.adk.AdkAgentConfig" value-field="cfg">
+                <field-map field-name="adkAgentConfigId"/>
+            </entity-find-one>
+            <if condition="!cfg">
+                <log level="warn" message="AdkSchedulerServices.run#ScheduledAgent: config ${adkAgentConfigId} not found"/>
+                <return/>
+            </if>
+
+            <script><![CDATA[
+                import org.moqui.adk.AdkManager
+
+                if (!AdkManager.isInitialized()) {
+                    AdkManager.lazyInit(ec.factory)
+                }
+                if (!AdkManager.isInitialized()) {
+                    ec.logger.warn("ADK not initialized — skipping scheduled run for ${cfg.agentName}")
+                    return
+                }
+
+                String prompt = cfg.schedulePrompt ?: 'Perform your scheduled task.'
+
+                // Create a one-off session for this scheduled run
+                Map sessionCtx = [
+                    userId          : 'scheduler',
+                    username        : 'scheduler',
+                    userFullName    : 'Scheduler',
+                    organizationName: '',
+                    companyPseudoId : '',
+                    tenantId        : cfg.ownerPartyId ?: 'DEFAULT',
+                    timeZone        : 'UTC',
+                    locale          : 'en_US',
+                ]
+                Map session = AdkManager.createSession('scheduler', sessionCtx)
+                String sessionId = session.id as String
+
+                // Run the agent synchronously
+                List events = AdkManager.runAgent('scheduler', sessionId, prompt)
+                def textEvent = events.reverse().find { e -> e.author == 'model' && e.content?.parts?.find { it.text } }
+                String result = textEvent?.content?.parts?.find { it.text }?.text ?: '[No response]'
+
+                agentName = cfg.agentName ?: 'ADK Agent'
+                chatRoomId = cfg.scheduleChatRoomId as String
+                resultText = "[${agentName}] ${result}"
+            ]]></script>
+
+            <!-- Post result to chat room if configured -->
+            <if condition="chatRoomId">
+                <script><![CDATA[
+                    // Find the ownerPartyId's primary user to post as
+                    String fromUserId = null
+                    try {
+                        boolean wasDisabled = ec.artifactExecution.disableAuthz()
+                        try {
+                            if (cfg.ownerPartyId) {
+                                def memberList = ec.entity.find('growerp.general.ChatRoomMember')
+                                    .condition('chatRoomId', chatRoomId).limit(1).list()
+                                if (memberList) fromUserId = memberList[0].userId as String
+                            }
+                            if (!fromUserId) {
+                                def sysUser = ec.entity.find('moqui.security.UserAccount')
+                                    .condition('username', 'SystemSupport').one()
+                                fromUserId = sysUser?.userId as String
+                            }
+                        } finally { if (!wasDisabled) ec.artifactExecution.enableAuthz() }
+                    } catch (Exception ignored) {}
+                ]]></script>
+                <if condition="fromUserId">
+                    <service-call name="create#growerp.general.ChatMessage" disable-authz="true"
+                        in-map="[chatRoomId: chatRoomId, fromUserId: fromUserId, content: resultText]"/>
+                </if>
+                <else>
+                    <log level="info" message="AdkScheduler: no fromUserId resolved for chatRoom ${chatRoomId}, skipping delivery"/>
+                </else>
+            </if>
+            <if condition="!chatRoomId">
+                <log level="info" message="AdkScheduler: ${agentName} ran — no chatRoomId set, result: ${resultText}"/>
+            </if>
+        </actions>
+    </service>
+
+</services>

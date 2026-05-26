@@ -8,5 +8,6 @@
     <screen-factory  load-path="screen/"/>
 
     <entity-factory load-data="data/AdkSecuritySeedData.xml"/>
+    <entity-factory load-data="data/AdkSchedulerData.xml"/>
 
 </component>

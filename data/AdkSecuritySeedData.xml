@@ -24,4 +24,15 @@
                authzTypeEnumId="AUTHZT_ALWAYS" authzActionEnumId="AUTHZA_ALL"/>
     </artifactGroups>
 
+    <!-- ADK service artifact group — grants AdkUsers permission to call ADK services
+         directly (e.g. when invoked from AdkDevServlet rather than via REST path) -->
+    <artifactGroups artifactGroupId="ADK_SERVICES" description="ADK Services">
+        <artifacts artifactName="AdkServices%"          artifactTypeEnumId="AT_SERVICE" inheritAuthz="Y"/>
+        <artifacts artifactName="AdkSchedulerServices%" artifactTypeEnumId="AT_SERVICE" inheritAuthz="Y"/>
+        <authz artifactAuthzId="ADK_SVC_ADMIN" userGroupId="ADMIN"
+               authzTypeEnumId="AUTHZT_ALWAYS" authzActionEnumId="AUTHZA_ALL"/>
+        <authz artifactAuthzId="ADK_SVC_USERS" userGroupId="AdkUsers"
+               authzTypeEnumId="AUTHZT_ALWAYS" authzActionEnumId="AUTHZA_ALL"/>
+    </artifactGroups>
+
 </entity-facade-xml>
