@@ -3,27 +3,24 @@
           xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
 
     <service verb="update" noun="AgentConfig">
-        <description>Save ADK agent configuration and (re)initialise the ADK runner.</description>
+        <description>Save (or create) an ADK agent config and register it in the runtime registry.
+            Multiple configs can be active simultaneously — one per ownerPartyId (tenant).</description>
         <in-parameters>
+            <parameter name="ownerPartyId"/>
             <parameter name="agentName"/>
             <parameter name="modelName"   default-value="gemini-2.0-flash"/>
             <parameter name="apiKey"      required="true"/>
             <parameter name="instruction"/>
             <parameter name="description"/>
         </in-parameters>
+        <out-parameters>
+            <parameter name="adkAgentConfigId"/>
+        </out-parameters>
         <actions>
-            <!-- Disable all currently enabled configs -->
-            <entity-find entity-name="moqui.adk.AdkAgentConfig" list="enabledList">
-                <econdition field-name="enabled" value="Y"/>
-            </entity-find>
-            <iterate list="enabledList" entry="cfg">
-                <set field="cfg.enabled" value="N"/>
-                <entity-update value-field="cfg"/>
-            </iterate>
-
-            <!-- Update existing or create new -->
+            <!-- Upsert by (ownerPartyId, agentName) — leave other tenants' configs untouched -->
             <entity-find entity-name="moqui.adk.AdkAgentConfig" list="existingList">
-                <econdition field-name="agentName" from="agentName"/>
+                <econdition field-name="agentName"   from="agentName"   ignore-if-empty="true"/>
+                <econdition field-name="ownerPartyId" from="ownerPartyId" ignore-if-empty="true"/>
             </entity-find>
             <if condition="existingList">
                 <set field="existing" from="existingList[0]"/>
@@ -31,28 +28,34 @@
                 <set field="existing.apiKey"      from="apiKey"/>
                 <set field="existing.instruction" from="instruction"/>
                 <set field="existing.description" from="description"/>
+                <set field="existing.ownerPartyId" from="ownerPartyId"/>
                 <set field="existing.enabled"     value="Y"/>
                 <entity-update value-field="existing"/>
+                <set field="adkAgentConfigId" from="existing.adkAgentConfigId"/>
                 <else>
                     <entity-make-value entity-name="moqui.adk.AdkAgentConfig" value-field="newCfg"/>
-                    <set field="newCfg.agentName"   from="agentName   ?: 'MoquiAgent'"/>
-                    <set field="newCfg.modelName"   from="modelName   ?: 'gemini-2.0-flash'"/>
-                    <set field="newCfg.apiKey"      from="apiKey"/>
-                    <set field="newCfg.instruction" from="instruction ?: 'You are a helpful assistant for the GrowERP ERP system.'"/>
-                    <set field="newCfg.description" from="description ?: 'ADK Agent'"/>
-                    <set field="newCfg.enabled"     value="Y"/>
+                    <set field="newCfg.ownerPartyId"  from="ownerPartyId"/>
+                    <set field="newCfg.agentName"     from="agentName    ?: 'MoquiAgent'"/>
+                    <set field="newCfg.modelName"     from="modelName    ?: 'gemini-2.0-flash'"/>
+                    <set field="newCfg.apiKey"        from="apiKey"/>
+                    <set field="newCfg.instruction"   from="instruction  ?: 'You are a helpful assistant for the GrowERP ERP system.'"/>
+                    <set field="newCfg.description"   from="description  ?: 'ADK Agent'"/>
+                    <set field="newCfg.enabled"       value="Y"/>
                     <entity-sequenced-id-primary value-field="newCfg"/>
                     <entity-create value-field="newCfg"/>
+                    <set field="adkAgentConfigId" from="newCfg.adkAgentConfigId"/>
                 </else>
             </if>
 
-            <!-- (Re)initialise the ADK runner with the new configuration.
-                 Passing null agentName uses HelloTimeAgent as default. -->
+            <!-- Ensure persistent session service is wired before registering the config -->
             <script><![CDATA[
-                org.moqui.adk.AdkManager.init(
-                    agentName ?: null,
-                    modelName ?: 'gemini-2.0-flash',
-                    instruction ?: '',
+                org.moqui.adk.AdkManager.initSessionService(ec.factory)
+                org.moqui.adk.AdkManager.initConfig(
+                    adkAgentConfigId,
+                    ownerPartyId ?: null,
+                    agentName    ?: null,
+                    modelName    ?: 'gemini-2.0-flash',
+                    instruction  ?: '',
                     apiKey
                 )
             ]]></script>
@@ -69,21 +72,9 @@
                 import org.moqui.adk.AdkManager
                 import org.moqui.adk.AdkSessionHolder
 
-                // Lazy-init ADK runner from saved config if not yet started
+                // Lazy-init: session service + all enabled agent configs
                 if (!AdkManager.isInitialized()) {
-                    boolean wasDisabled = ec.artifactExecution.disableAuthz()
-                    def cfg
-                    try { cfg = ec.entity.find('moqui.adk.AdkAgentConfig').condition('enabled','Y').one() }
-                    finally { if (!wasDisabled) ec.artifactExecution.enableAuthz() }
-
-                    if (cfg) {
-                        AdkManager.init(cfg.agentName, cfg.modelName, cfg.instruction, cfg.apiKey)
-                    } else {
-                        String envKey = System.getenv('GOOGLE_API_KEY') ?:
-                                        System.getenv('GOOGLE_GENAI_API_KEY') ?:
-                                        System.getenv('GEMINI_API_KEY') ?: ''
-                        if (envKey) AdkManager.init(null, 'gemini-2.0-flash', '', envKey)
-                    }
+                    AdkManager.lazyInit(ec.factory)
                 }
 
                 if (!AdkManager.isInitialized()) {
@@ -91,11 +82,57 @@
                     return
                 }
 
-                def adkSession = AdkManager.createSession(ec.user.userId ?: 'anonymous')
+                Map contextState = [
+                    userId          : ec.user.userId   ?: 'anonymous',
+                    username        : ec.user.username ?: 'anonymous',
+                    userFullName    : '',
+                    organizationName: '',
+                    companyPseudoId : '',
+                    tenantId        : 'DEFAULT',
+                    timeZone        : ec.user.timeZone?.ID ?: 'UTC',
+                    locale          : ec.user.locale?.toString() ?: 'en_US',
+                ]
+                try {
+                    boolean wasDisabled = ec.artifactExecution.disableAuthz()
+                    try {
+                        def userAcct = ec.entity.find('moqui.security.UserAccount')
+                            .condition('userId', ec.user.userId)
+                            .selectField('userFullName').selectField('partyId')
+                            .one()
+                        contextState.userFullName = userAcct?.userFullName ?: ''
+
+                        String userPartyId = userAcct?.partyId
+                        if (userPartyId) {
+                            def userParty = ec.entity.find('mantle.party.Party')
+                                .condition('partyId', userPartyId)
+                                .selectField('ownerPartyId').one()
+                            String ownerPartyId = userParty?.ownerPartyId
+                            if (ownerPartyId) {
+                                contextState.tenantId = ownerPartyId
+
+                                def companyList = ec.entity.find('mantle.party.PartyDetailAndRole')
+                                    .condition('ownerPartyId', ownerPartyId)
+                                    .condition('partyTypeEnumId', 'PtyOrganization')
+                                    .condition('roleTypeId', 'OrgInternal')
+                                    .limit(1).list()
+                                String companyPartyId = companyList[0]?.partyId
+                                if (companyPartyId) {
+                                    def org = ec.entity.find('mantle.party.Organization')
+                                        .condition('partyId', companyPartyId).one()
+                                    contextState.organizationName = org?.organizationName ?: ''
+
+                                    def companyParty = ec.entity.find('mantle.party.Party')
+                                        .condition('partyId', companyPartyId)
+                                        .selectField('pseudoId').one()
+                                    contextState.companyPseudoId = companyParty?.pseudoId ?: ''
+                                }
+                            }
+                        }
+                    } finally { if (!wasDisabled) ec.artifactExecution.enableAuthz() }
+                } catch (Exception ignored) { /* best-effort */ }
+
+                def adkSession = AdkManager.createSession(ec.user.userId ?: 'anonymous', contextState)
                 sessionId = adkSession.id as String
-                // Mirror in AdkSessionHolder so the ChatUI inspector panel keeps working
-                AdkSessionHolder.sessions[sessionId] = []
-                AdkSessionHolder.logEvent(sessionId, 'session_created', 'Session created', [sessionId: sessionId])
             ]]></script>
         </actions>
     </service>
@@ -114,21 +151,8 @@
                 import org.moqui.adk.AdkManager
                 import org.moqui.adk.AdkSessionHolder
 
-                // Lazy-init ADK runner from saved config if not yet started
                 if (!AdkManager.isInitialized()) {
-                    boolean wasDisabled = ec.artifactExecution.disableAuthz()
-                    def cfg
-                    try { cfg = ec.entity.find('moqui.adk.AdkAgentConfig').condition('enabled','Y').one() }
-                    finally { if (!wasDisabled) ec.artifactExecution.enableAuthz() }
-
-                    if (cfg) {
-                        AdkManager.init(cfg.agentName, cfg.modelName, cfg.instruction, cfg.apiKey)
-                    } else {
-                        String envKey = System.getenv('GOOGLE_API_KEY') ?:
-                                        System.getenv('GOOGLE_GENAI_API_KEY') ?:
-                                        System.getenv('GEMINI_API_KEY') ?: ''
-                        if (envKey) AdkManager.init(null, 'gemini-2.0-flash', '', envKey)
-                    }
+                    AdkManager.lazyInit(ec.factory)
                 }
 
                 if (!AdkManager.isInitialized()) {
@@ -139,7 +163,7 @@
                 AdkSessionHolder.logEvent(sessionId, 'user_message', 'User message', [message: message])
 
                 def events = AdkManager.runAgent(ec.user.userId ?: 'anonymous', sessionId, message)
-                def textEvent = events.reverse().find { it.content?.parts }
+                def textEvent = events.reverse().find { e -> e.author == 'model' && e.content?.parts?.find { it.text } }
                 response = textEvent?.content?.parts?.find { it.text }?.text ?: ''
 
                 if (!response) response = '[No response from agent]'

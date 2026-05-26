@@ -102,7 +102,7 @@ class AdkDevServlet extends HttpServlet {
 
         switch (method) {
             case 'POST':
-                json(resp, AdkManager.createSession(userId))
+                json(resp, AdkManager.createSession(userId, buildContext(req, resp)))
                 break
             case 'GET':
 
@@ -130,7 +130,7 @@ class AdkDevServlet extends HttpServlet {
         String sid    = (body.sessionId ?: '') as String
         String text   = (body.newMessage?.parts?.find { it.text }?.text ?: '') as String
 
-        if (!sid) sid = AdkManager.createSession(userId).id as String
+        if (!sid) sid = AdkManager.createSession(userId, buildContext(req, resp)).id as String
 
         if (sse) {
             resp.contentType = 'text/event-stream; charset=utf-8'
@@ -192,8 +192,112 @@ class AdkDevServlet extends HttpServlet {
         (ExecutionContextFactory) req.servletContext.getAttribute('executionContextFactory')
     }
 
+    /**
+     * Build a session-state map from the Moqui ExecutionContext so that the ADK
+     * agent's instruction preamble can resolve {key} placeholders.
+     *
+     * Gathered fields: userId, username, userFullName, organizationName,
+     * companyPseudoId, tenantId (ownerPartyId), timeZone, locale.
+     */
+    private Map<String, Object> buildContext(HttpServletRequest req, HttpServletResponse resp) {
+        Map<String, Object> ctx = [
+            userId          : 'anonymous',
+            username        : 'anonymous',
+            userFullName    : '',
+            organizationName: '',
+            companyPseudoId : '',
+            tenantId        : 'DEFAULT',
+            timeZone        : 'UTC',
+            locale          : 'en_US',
+        ]
+        try {
+            ExecutionContextFactory ecf = ecf(req)
+            if (!ecf) return ctx
+            def ec = ecf.getExecutionContext()
+            try {
+                // Initialize web facade to natively parse api_key/moquiSessionToken from headers.
+                // Wrapped separately: initWebFacade may throw during visit/screen-URL stats tracking
+                // for non-screen paths like /adk/apps/... — but api_key auth inside
+                // initFromHttpRequest runs first and may have already succeeded.
+                if (ec.getWebImpl() == null) {
+                    try {
+                        ec.initWebFacade(req.servletContext.getInitParameter("moqui-name") ?: "webroot", req, resp)
+                    } catch (Exception ignored) {}
+                }
+
+                // Always read user after the initWebFacade attempt — auth may have succeeded
+                // even if WebFacade setup partially failed (e.g. screen URL resolution error).
+                if (ec.user?.userId) {
+                    ctx.userId   = ec.user.userId   ?: 'anonymous'
+                    ctx.username = ec.user.username ?: 'anonymous'
+                    ctx.timeZone = ec.user.timeZone?.ID ?: 'UTC'
+                    ctx.locale   = ec.user.locale?.toString() ?: 'en_US'
+                }
+
+                // Resolve full name, organization, company pseudoId, and ownerPartyId (GrowERP tenant)
+                if (ec.user?.userId) {
+                    try {
+                        boolean wasDisabled = ec.artifactExecution.disableAuthz()
+                        try {
+                            // userFullName lives on UserAccount; UserFacade has no getter for it
+                            def userAcct = ec.entity.find('moqui.security.UserAccount')
+                                .condition('userId', ec.user.userId)
+                                .selectField('userFullName').selectField('partyId')
+                                .one()
+                            ctx.userFullName = userAcct?.userFullName ?: ''
+
+                            // ownerPartyId is GrowERP's tenant identifier — on mantle.party.Party
+                            String userPartyId = userAcct?.partyId
+                            if (userPartyId) {
+                                def userParty = ec.entity.find('mantle.party.Party')
+                                    .condition('partyId', userPartyId)
+                                    .selectField('ownerPartyId')
+                                    .one()
+                                String ownerPartyId = userParty?.ownerPartyId
+                                if (ownerPartyId) {
+                                    ctx.tenantId = ownerPartyId
+
+                                    // Main company = OrgInternal party for this owner
+                                    def companyList = ec.entity.find('mantle.party.PartyDetailAndRole')
+                                        .condition('ownerPartyId', ownerPartyId)
+                                        .condition('partyTypeEnumId', 'PtyOrganization')
+                                        .condition('roleTypeId', 'OrgInternal')
+                                        .limit(1).list()
+                                    String companyPartyId = companyList[0]?.partyId
+                                    if (companyPartyId) {
+                                        def org = ec.entity.find('mantle.party.Organization')
+                                            .condition('partyId', companyPartyId).one()
+                                        ctx.organizationName = org?.organizationName ?: ''
+
+                                        def companyParty = ec.entity.find('mantle.party.Party')
+                                            .condition('partyId', companyPartyId)
+                                            .selectField('pseudoId').one()
+                                        ctx.companyPseudoId = companyParty?.pseudoId ?: ''
+                                    }
+                                }
+                            }
+                        } finally {
+                            if (!wasDisabled) ec.artifactExecution.enableAuthz()
+                        }
+                    } catch (Exception ignored) { /* best-effort */ }
+                }
+            } finally {
+                ec.destroy()
+            }
+        } catch (Exception e) {
+            // Context is best-effort; never block session creation
+        }
+        ctx
+    }
+
     private static void json(HttpServletResponse resp, Object data) {
         resp.contentType = 'application/json; charset=utf-8'
         resp.writer.write(JsonOutput.toJson(data))
+    }
+
+    @Override
+    void destroy() {
+        AdkManager.destroy()
+        super.destroy()
     }
 }

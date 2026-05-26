@@ -5,12 +5,31 @@
 
     <entity entity-name="AdkAgentConfig" package="moqui.adk" use="configuration">
         <field name="adkAgentConfigId" type="id" is-pk="true"/>
+        <field name="ownerPartyId" type="id"/>
         <field name="agentName"   type="text-short"/>
         <field name="modelName"   type="text-short"/>
         <field name="apiKey"      type="text-medium"/>
         <field name="instruction" type="text-long"/>
         <field name="description" type="text-short"/>
         <field name="enabled"     type="text-indicator"/>
+    </entity>
+
+    <!-- Persistent ADK sessions (replaces in-memory InMemorySessionService) -->
+    <entity entity-name="AdkSession" package="moqui.adk" use="transactional">
+        <field name="adkSessionId"   type="id" is-pk="true"/>
+        <field name="appName"        type="text-short"/>
+        <field name="userId"         type="text-short"/>
+        <field name="configId"       type="id"/>
+        <field name="stateJson"      type="text-very-long"/>
+        <field name="lastUpdateTime" type="date-time"/>
+    </entity>
+
+    <entity entity-name="AdkSessionEvent" package="moqui.adk" use="transactional">
+        <field name="adkSessionEventId" type="id" is-pk="true"/>
+        <field name="adkSessionId"      type="id"/>
+        <field name="eventJson"         type="text-very-long"/>
+        <field name="eventTime"         type="date-time"/>
+        <index name="ADKSESEV_SID"><index-field name="adkSessionId"/></index>
     </entity>
 
 </entities>

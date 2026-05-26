@@ -9,8 +9,11 @@ Google ADK (Agent Development Kit) embedded as a Moqui Framework component. Runs
 A native Moqui component that integrates the [Google ADK Java SDK](https://github.com/google/adk-java) into any Moqui application:
 
 - **ADK DevUI** — the official Angular chat interface served by Moqui at `http://…/adk/`
-- **Google ADK Java SDK** — `LlmAgent` + `InMemoryRunner` handle agent execution and session management
-- **HelloTimeAgent** — built-in example agent (tells the current time for a city) used when no custom agent is configured
+- **Google ADK Java SDK** — `LlmAgent` + `Runner` handle agent execution and session management
+- **Persistent sessions** — conversation history and session state survive Moqui restarts (stored in `AdkSession` / `AdkSessionEvent` entities)
+- **Multi-tenant agents** — each company (`ownerPartyId`) can have its own agent config running simultaneously
+- **Moqui MCP tools** — every agent is wired to the [moqui-mcp](../moqui-mcp) Model Context Protocol tools, so agents can search and execute Moqui services (and browse screens) to answer real ERP questions
+- **Default `growerp-agent`** — used when no custom agent is configured: a GrowERP/Moqui assistant with the Moqui MCP tools plus a `getCurrentTime` example tool
 - **Moqui dashboard** — status overview and configuration screen at `/vapps/adk/`
 - No extra processes, no Python, no extra ports — everything runs inside Moqui
 
@@ -99,7 +102,7 @@ export GOOGLE_API_KEY=AIza...
 java -jar moqui.war no-run-es
 ```
 
-HelloTimeAgent is used automatically. No UI config needed.
+The default `growerp-agent` is used automatically. No UI config needed.
 
 ### Option B — Moqui Admin UI
 
@@ -109,14 +112,15 @@ HelloTimeAgent is used automatically. No UI config needed.
 
 | Field | Description | Default |
 |-------|-------------|---------|
-| Agent Name | Leave blank to use the built-in HelloTimeAgent | _(blank = HelloTimeAgent)_ |
+| Owner Party ID | Tenant/company this agent belongs to (blank = global) | _(blank = global)_ |
+| Agent Name | Leave blank to use the built-in `growerp-agent` | _(blank = growerp-agent)_ |
 | Model | Gemini model ID | `gemini-2.0-flash` |
 | API Key | Your Google Gemini API key | — |
 | System Instruction | Agent persona / constraints | — |
 
 4. Click **Save Configuration**
 
-Config takes effect immediately (no restart). DB config takes priority over env vars.
+Config takes effect immediately (no restart). Multiple configs can be active simultaneously — one per tenant. DB config takes priority over env vars.
 
 ---
 
@@ -126,12 +130,14 @@ Config takes effect immediately (no restart). DB config takes priority over env 
 
 Navigate to `http://localhost:8080/adk/` — the official Google ADK Angular interface:
 
-1. Select **hello-time-agent** from the dropdown (or your custom agent if configured)
+1. Select **growerp-agent** from the dropdown (or your custom agent if configured)
 2. Click **+ New Session**
-3. Type a message, e.g. `What time is it in Tokyo?`
-4. The agent calls the `getCurrentTime` tool and replies via Gemini
+3. Type a message, e.g. `list product services` or `What time is it in Tokyo?`
+4. The agent calls the Moqui MCP tools (or `getCurrentTime`) and replies via Gemini
 
 The Trace / Events / State / Sessions tabs show full invocation details.
+
+Sessions persist across Moqui restarts — conversation history is stored in the database.
 
 ### Moqui Dashboard
 
@@ -151,32 +157,49 @@ Browser
   ├── POST /adk/apps/…/sessions│ AdkDevServlet (Jakarta Servlet)
   ├── POST /adk/run_sse       ─┘    │
   │                                 ▼
-  │                            AdkManager (Groovy singleton)
+  │                         AdkManager (Groovy singleton)
+  │                         registry: configId → Runner
+  │                         tenantRegistry: ownerPartyId → configId
   │                                 │
-  │                       ┌─────────┴──────────┐
-  │                       │                    │
-  │                  InMemoryRunner      HelloTimeAgent
-  │                  (ADK Java SDK)      (or custom LlmAgent)
-  │                       │
-  │                       ▼
-  │              Gemini API (google.generativeai)
+  │              ┌──────────────────┼──────────────────┐
+  │              │                  │                  │
+  │         Runner (tenant A)  Runner (tenant B)  Runner (global)
+  │         LlmAgent           LlmAgent           growerp-agent (default)
+  │              │                                      │
+  │              │              all agents ──► Moqui MCP tools (moqui-mcp, SSE)
+  │              └── shared: MoquiSessionService ──► AdkSession / AdkSessionEvent (DB)
+  │                                 │
+  │                                 ▼
+  │                       Gemini API (google.generativeai)
   │
   └── /vapps/adk/*         → Moqui screens (dashboard, configuration)
 ```
+
+### Session persistence
+
+ADK Java 1.3.0 ships only `InMemorySessionService` and `VertexAiSessionService`. This component provides **`MoquiSessionService`** — a custom `BaseSessionService` implementation that stores sessions and events in Moqui's own database:
+
+- `AdkSession` — one row per session (state JSON, userId, configId, timestamps)
+- `AdkSessionEvent` — one row per event/message (full event JSON in chronological order)
+
+`MoquiSessionService` is shared across all runners in the registry, so any runner can read any session after a restart.
+
+> **Invariant — `appendEvent` must also update the in-memory `Session`.** ADK's `BaseSessionService.appendEvent` default does three things: ignore partial (streaming) events, apply the event's `stateDelta` to the live `session.state()`, and add the event to the live `session.events()`. `MoquiSessionService` overrides `appendEvent` to persist to the DB, so it **must replicate that in-memory behavior as well**. If it only writes to the DB, the running invocation never sees function-call/response events on the next LLM turn, and the agent re-issues the same tool call in a loop until `maxLlmCalls` is hit.
 
 ### Key files
 
 | File | Role |
 |------|------|
 | `src/…/AdkDevServlet.groovy` | Jakarta Servlet at `/adk` and `/adk/*` — serves Angular SPA + ADK REST API |
-| `src/…/AdkManager.groovy` | Singleton: `LlmAgent` + `InMemoryRunner` + lazy init + session management |
+| `src/…/AdkManager.groovy` | Registry facade: multi-agent `configId→Runner` map, tenant routing, session ownership |
+| `src/…/MoquiSessionService.groovy` | Persistent `BaseSessionService` backed by `AdkSession` + `AdkSessionEvent` entities |
 | `src/…/HelloTimeAgent.groovy` | Example agent — tells current time for a city using a function tool |
 | `src/…/AdkSessionHolder.groovy` | In-memory event log for the Moqui inspector panel |
 | `screen/adk-ui/` | Extracted Angular DevUI assets (build artifact, gitignored) |
 | `screen/Adk/dashboard.xml` | Moqui status dashboard |
 | `screen/Adk/Configuration.xml` | Agent config form |
 | `service/AdkServices.xml` | `update#AgentConfig`, `create#Session`, `run#Agent` Moqui services |
-| `entity/AdkEntities.xml` | `moqui.adk.AdkAgentConfig` entity |
+| `entity/AdkEntities.xml` | `AdkAgentConfig`, `AdkSession`, `AdkSessionEvent` entities |
 | `MoquiConf.xml` | Servlet registration + screen facade |
 | `build.gradle` | `extractAdkBrowserAssets` task + `adkDevAssets` configuration |
 | `data/AdkSecuritySeedData.xml` | Auth rules for `/adk/*` + `AdkUsers` user group |
@@ -185,38 +208,55 @@ Browser
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/adk/list-apps` | Returns `["hello-time-agent"]` (or current agent name) |
-| `POST` | `/adk/apps/{app}/users/{uid}/sessions` | Create session |
+| `GET` | `/adk/list-apps` | Returns registered agent names |
+| `POST` | `/adk/apps/{app}/users/{uid}/sessions` | Create session (routed to tenant's runner) |
 | `GET` | `/adk/apps/{app}/users/{uid}/sessions` | List sessions |
 | `GET` | `/adk/apps/{app}/users/{uid}/sessions/{sid}` | Get session |
-| `DELETE` | `/adk/apps/{app}/users/{uid}/sessions/{sid}` | Delete session |
+| `DELETE` | `/adk/apps/{app}/users/{uid}/sessions/{sid}` | Delete session + events |
 | `POST` | `/adk/run` | Synchronous run — returns JSON event array |
 | `POST` | `/adk/run_sse` | Streaming run — Server-Sent Events |
 
 ---
 
-## HelloTimeAgent
+## Default agent (`growerp-agent`)
 
-The built-in example agent is ported from the [ADK Java quickstart](https://github.com/google/adk-java). It demonstrates:
+When no custom agent is configured, `AdkManager.initConfig()` builds a built-in `growerp-agent`: a GrowERP/Moqui assistant whose system instruction tells it to answer ERP questions using the Moqui MCP tools, and to stop calling tools once it has enough information to answer (this avoids tool-call loops). Its tools are:
 
-- `FunctionTool.create(Class, methodName)` — registering a Groovy method as an ADK tool
-- `@Schema` annotations for parameter descriptions consumed by Gemini
-- Tool returning a `Map<String, String>` result
+- the **Moqui MCP toolset** (`moqui_search_services`, `moqui_get_service_details`, `moqui_execute_service`, screen browsing, …) served by [moqui-mcp](../moqui-mcp)
+- a **`getCurrentTime`** example function tool, ported from the [ADK Java quickstart](https://github.com/google/adk-java), demonstrating `FunctionTool.create(Class, methodName)` + `@Schema` parameter annotations
 
-Source: [`src/main/groovy/org/moqui/adk/HelloTimeAgent.groovy`](src/main/groovy/org/moqui/adk/HelloTimeAgent.groovy)
+Source: [`src/main/groovy/org/moqui/adk/HelloTimeAgent.groovy`](src/main/groovy/org/moqui/adk/HelloTimeAgent.groovy) (the `getCurrentTime` tool)
 
-Try asking: `What time is it in London?` or `amsterdam time?`
+Try asking: `list product services`, `What time is it in London?`, or `who am I?`
+
+### Tool-call iteration cap
+
+`AdkManager.defaultRunConfig()` sets `maxLlmCalls(12)` so a single chat turn can make at most 12 LLM calls. This is a safety net: if a model ever loops on tool calls, the run stops with an error instead of hanging the backend. Legitimate multi-step tool use stays well under this limit.
 
 ---
 
 ## Adding a Custom Agent
 
-Replace HelloTimeAgent with your own `LlmAgent`:
+### Single global agent
 
-1. Go to **ADK → Configuration**, enter a custom **Agent Name**, **Model**, **API Key**, and **System Instruction**, then save.
-2. The runner reinitializes immediately with a plain `LlmAgent` (no function tools) using your config.
+Go to **ADK → Configuration**, enter a custom **Agent Name**, **Model**, **API Key**, and **System Instruction**, then save. The runner reinitializes immediately. Leave **Owner Party ID** blank to apply globally.
 
-For an agent with custom tools, extend `AdkManager.init()` to detect your agent name and wire in your `LlmAgent` instance with `FunctionTool` entries.
+For an agent with custom Groovy tools, extend `AdkManager.initConfig()` to detect your agent name and wire in your `LlmAgent` with `FunctionTool` entries.
+
+### Per-tenant agents (multi-company)
+
+Call `update#AgentConfig` once per tenant with their `ownerPartyId`:
+
+```
+service: moqui.adk.AdkServices.update#AgentConfig
+  ownerPartyId: "PARTY_001"
+  agentName: "sales-agent"
+  modelName: "gemini-2.0-flash"
+  apiKey: "AIza..."
+  instruction: "You are a sales assistant for Acme Corp..."
+```
+
+Each tenant's users will be routed to their own `Runner` + `LlmAgent` instance. Session history is isolated per session (tracked by `configId` in `AdkSession`).
 
 ---
 
@@ -224,9 +264,11 @@ For an agent with custom tools, extend `AdkManager.init()` to detect your agent 
 
 | Entity | Purpose |
 |--------|---------|
-| `moqui.adk.AdkAgentConfig` | Agent config: name, model, API key, instruction, enabled flag |
+| `moqui.adk.AdkAgentConfig` | Agent config: ownerPartyId, name, model, API key, instruction, enabled flag |
+| `moqui.adk.AdkSession` | Persistent session: userId, configId, state JSON, timestamps |
+| `moqui.adk.AdkSessionEvent` | Individual event/message JSON for a session (ordered by eventTime) |
 
-Session state is held in-memory by the ADK `InMemoryRunner` — not persisted to the database. Sessions are lost on Moqui restart.
+Session state and full conversation history are stored in the database and survive Moqui restarts.
 
 ---
 
@@ -263,6 +305,12 @@ Run the Gradle extraction task:
 ```bash
 cd moqui && ./gradlew :runtime:component:moqui-adk:extractAdkBrowserAssets
 ```
+
+### Sessions lost after restart
+
+Sessions are now persisted by default via `MoquiSessionService`. If sessions are still lost, check:
+- `AdkSession` and `AdkSessionEvent` tables exist (re-run `load types=seed,seed-initial,install`)
+- No DB errors in Moqui log when `appendEvent` is called
 
 ---
 
