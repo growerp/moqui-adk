@@ -39,11 +39,32 @@ Use the 'getCurrentTime' tool for this purpose.
             .build()
     }
 
+    /** Common city → IANA timezone lookup. Unknown cities fall back to UTC. */
+    private static final Map<String, String> CITY_ZONES = [
+        'bangkok'     : 'Asia/Bangkok',
+        'bkk'         : 'Asia/Bangkok',
+        'singapore'   : 'Asia/Singapore',
+        'tokyo'       : 'Asia/Tokyo',
+        'hong kong'   : 'Asia/Hong_Kong',
+        'mumbai'      : 'Asia/Kolkata',
+        'dubai'       : 'Asia/Dubai',
+        'london'      : 'Europe/London',
+        'paris'       : 'Europe/Paris',
+        'berlin'      : 'Europe/Berlin',
+        'amsterdam'   : 'Europe/Amsterdam',
+        'new york'    : 'America/New_York',
+        'los angeles' : 'America/Los_Angeles',
+        'chicago'     : 'America/Chicago',
+        'sao paulo'   : 'America/Sao_Paulo',
+        'sydney'      : 'Australia/Sydney',
+    ]
+
     @Schema(description = 'Get the current time for a given city')
     static Map<String, String> getCurrentTime(
             @Schema(name = 'city', description = 'Name of the city to get the time for') String city) {
-        // Stub: real implementation would look up local time via timezone API
-        String time = java.time.ZonedDateTime.now().format(
+        String key = city?.trim()?.toLowerCase()
+        String zoneId = CITY_ZONES[key] ?: 'UTC'
+        String time = java.time.ZonedDateTime.now(java.time.ZoneId.of(zoneId)).format(
             java.time.format.DateTimeFormatter.ofPattern('hh:mm a z'))
         return [city: city, currentTime: time]
     }

@@ -45,7 +45,9 @@ class AdkManager {
     static final String DEFAULT_CONFIG = '__default__'
 
     // configId → Runner (one per enabled AdkAgentConfig)
-    private static final Map<String, Runner>  registry       = new ConcurrentHashMap<>()
+    private static final Map<String, Runner>   registry       = new ConcurrentHashMap<>()
+    // configId → LlmAgent — kept alongside Runner so runOneOff can build a fresh Runner
+    private static final Map<String, LlmAgent> agentRegistry  = new ConcurrentHashMap<>()
     // ownerPartyId → configId for per-tenant routing
     private static final Map<String, String>  tenantRegistry = new ConcurrentHashMap<>()
     // sessionId → configId — in-memory cache rebuilt on demand from DB after restart
@@ -107,6 +109,11 @@ Do not call any tool for this.
         String envModel = System.getenv('GEMINI_MODEL') ?: System.getProperty('GEMINI_MODEL') ?: 'gemini-2.0-flash'
         LlmAgent agent
 
+        // FunctionTool.create returns List<FunctionTool> — build combined list then pass to tools()
+        List allTools = new ArrayList()
+        allTools.addAll(com.google.adk.tools.FunctionTool.create(HelloTimeAgent.class, 'getCurrentTime'))
+        if (mcpToolset) allTools.add(mcpToolset)
+
         if (!agentName) {
             agent = LlmAgent.builder()
                 .name('growerp-agent')
@@ -128,14 +135,14 @@ CRITICAL tool-use rules — follow exactly:
 - Make at most a few tool calls per question; if you already have an answer, just answer.
 ''')
                 .model(modelName ?: envModel)
-                .tools(com.google.adk.tools.FunctionTool.create(HelloTimeAgent.class, 'getCurrentTime'), mcpToolset)
+                .tools(allTools)
                 .build()
         } else {
             agent = LlmAgent.builder()
                     .name(agentName)
                     .model(modelName ?: envModel)
                     .instruction(CONTEXT_PREAMBLE + (instruction ?: ''))
-                    .tools(mcpToolset)
+                    .tools(allTools)
                     .build()
         }
 
@@ -145,7 +152,8 @@ CRITICAL tool-use rules — follow exactly:
                 .sessionService(sharedSessionService ?: new InMemorySessionService())
                 .build()
 
-        registry[configId] = runner
+        registry[configId]      = runner
+        agentRegistry[configId] = agent
         if (ownerPartyId) tenantRegistry[ownerPartyId] = configId
         currentConfig = [agentName: agent.name(), modelName: modelName, configId: configId]
         logger.info("ADK agent '${agent.name()}' registered as configId='${configId}' (tenant='${ownerPartyId ?: 'global'}')")
@@ -163,20 +171,24 @@ CRITICAL tool-use rules — follow exactly:
      * api_key header is checked unconditionally in initFromHttpRequest.
      */
     private static String generateMcpApiKey(ExecutionContextFactory ecf) {
-        try {
+        // Must run in a fresh thread: ecf.getExecutionContext() returns the thread-local EC,
+        // so calling it on the request thread would grab (and then destroy) the caller's EC.
+        String[] result = [null]
+        Thread t = new Thread({
             def ec = ecf.getExecutionContext()
             try {
                 ec.user.internalLoginUser('SystemSupport')
-                String key = ec.user.getLoginKey(8760f)  // 1-year expiry
+                result[0] = ec.user.getLoginKey(8760f)  // 1-year expiry
                 logger.info('Generated MCP API key for SystemSupport (valid 1 year)')
-                return key
+            } catch (Exception e) {
+                logger.warn("Could not generate MCP API key, falling back to Basic auth: ${e.message}")
             } finally {
                 ec.destroy()
             }
-        } catch (Exception e) {
-            logger.warn("Could not generate MCP API key, falling back to Basic auth: ${e.message}")
-            return null
-        }
+        }, 'adk-mcpkey-gen')
+        t.start()
+        t.join(5000L)
+        return result[0]
     }
 
     static void initSessionService(ExecutionContextFactory ecf) {
@@ -202,10 +214,10 @@ CRITICAL tool-use rules — follow exactly:
         } catch (Exception ignored) {}
 
         if (cfgList) {
-            cfgList.each { cfg ->
-                initConfig(cfg.adkAgentConfigId as String, cfg.ownerPartyId as String,
-                        cfg.agentName as String, cfg.modelName as String,
-                        cfg.instruction as String, cfg.apiKey as String)
+            for (def cfg in cfgList) {
+                initConfig(cfg.getString('adkAgentConfigId'), cfg.getString('ownerPartyId'),
+                        cfg.getString('agentName'), cfg.getString('modelName'),
+                        cfg.getString('instruction'), cfg.getString('apiKey'))
             }
             return
         }
@@ -282,8 +294,54 @@ CRITICAL tool-use rules — follow exactly:
     static List<Map> runAgent(String userId, String sessionId, String text) {
         Content userContent = buildUserContent(text)
         List<Map> events = []
+        Throwable[] err  = [null]
         runnerForSession(sessionId).runAsync(userId, sessionId, userContent, defaultRunConfig())
-            .blockingSubscribe { Event e -> events << eventToMap(e) }
+            .blockingSubscribe(
+                { Event e -> events << eventToMap(e) },
+                { Throwable t -> err[0] = t; logger.error("ADK runAgent error (session={}): {}", sessionId, t.message, t) }
+            )
+        if (err[0]) throw err[0]
+        events
+    }
+
+    /**
+     * Run a one-off agent turn for the scheduler.
+     * Uses a fresh InMemorySessionService to avoid the DB transaction isolation
+     * issue: createSession writes to DB within an open (uncommitted) service
+     * transaction; a subsequent runAsync on an IO thread cannot see it via
+     * MoquiSessionService.getSession. In-memory sessions need no DB round-trip.
+     */
+    static List<Map> runOneOff(String configId, String userId, String text,
+                               Map<String, Object> initialState = [:]) {
+        String cid = configId ?: DEFAULT_CONFIG
+        LlmAgent agent = agentRegistry[cid] ?: agentRegistry.values().first()
+        if (!agent) throw new IllegalStateException('ADK not initialized — add API key in ADK → Configuration')
+
+        // The agent instruction embeds CONTEXT_PREAMBLE with {userId}/{username}/... placeholders
+        // that ADK resolves from session state. Seed state with these keys so injectSessionState
+        // does not throw "Context variable not found".
+        def state = new java.util.concurrent.ConcurrentHashMap<String, Object>(initialState ?: [:])
+
+        def inMemSvc = new InMemorySessionService()
+        def session  = inMemSvc.createSession(APP_NAME, userId, state, null).blockingGet()
+
+        Runner oneOff = Runner.builder()
+                .agent(agent)
+                .appName(APP_NAME)
+                .sessionService(inMemSvc)
+                .build()
+
+        Content userContent = buildUserContent(text)
+        List<Map> events = []
+        Throwable[] err  = [null]
+
+        oneOff.runAsync(userId, session.id(), userContent, defaultRunConfig())
+              .blockingSubscribe(
+                  { Event e -> events << eventToMap(e) },
+                  { Throwable t -> err[0] = t; logger.error("ADK runOneOff error (config={}): {}", cid, t.message, t) }
+              )
+
+        if (err[0]) throw err[0]
         events
     }
 
@@ -374,6 +432,7 @@ CRITICAL tool-use rules — follow exactly:
             mcpToolset = null
         }
         registry.clear()
+        agentRegistry.clear()
         tenantRegistry.clear()
         sessionOwn.clear()
         sharedSessionService = null

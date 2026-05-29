@@ -1,0 +1,283 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-2.1.xsd">
+
+    <service verb="get" noun="AdkAgentConfig">
+        <out-parameters>
+            <parameter name="adkAgentConfigs" type="List"/>
+        </out-parameters>
+        <actions>
+            <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner"
+                out-map="context"/>
+            <entity-find entity-name="moqui.adk.AdkAgentConfig" list="cfgList">
+                <econdition field-name="ownerPartyId" from="ownerPartyId" ignore-if-empty="true"/>
+                <order-by field-name="agentName"/>
+            </entity-find>
+            <set field="adkAgentConfigs" from="[]"/>
+            <iterate list="cfgList" entry="cfg">
+                <set field="cfgOut" from="[
+                    adkAgentConfigId  : cfg.adkAgentConfigId,
+                    agentName         : cfg.agentName,
+                    modelName         : cfg.modelName,
+                    instruction       : cfg.instruction,
+                    description       : cfg.description,
+                    enabled           : cfg.enabled == 'Y',
+                    scheduleExpression: cfg.scheduleExpression,
+                    scheduleEnabled   : cfg.scheduleEnabled == 'Y',
+                    schedulePrompt    : cfg.schedulePrompt,
+                    scheduleChatRoomId: cfg.scheduleChatRoomId,
+                ]"/>
+                <script>adkAgentConfigs.add(cfgOut)</script>
+            </iterate>
+        </actions>
+    </service>
+
+    <service verb="create" noun="AdkAgentConfig">
+        <in-parameters>
+            <parameter name="agentName"/>
+            <parameter name="modelName"/>
+            <parameter name="apiKey"/>
+            <parameter name="instruction"/>
+            <parameter name="description"/>
+            <parameter name="scheduleExpression"/>
+            <parameter name="scheduleEnabled" type="Boolean" default="false"/>
+            <parameter name="schedulePrompt"/>
+            <parameter name="scheduleChatRoomId"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="adkAgentConfig" type="Map"/>
+        </out-parameters>
+        <actions>
+            <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner"
+                out-map="context"/>
+            <service-call name="AdkServices.update#AgentConfig" out-map="context"
+                in-map="[ownerPartyId: ownerPartyId, agentName: agentName,
+                          modelName: modelName, apiKey: apiKey,
+                          instruction: instruction, description: description,
+                          scheduleExpression: scheduleExpression,
+                          scheduleEnabled: scheduleEnabled ? 'Y' : 'N',
+                          schedulePrompt: schedulePrompt,
+                          scheduleChatRoomId: scheduleChatRoomId]"/>
+            <entity-find-one entity-name="moqui.adk.AdkAgentConfig" value-field="cfg"
+                auto-field-map="[adkAgentConfigId: adkAgentConfigId]"/>
+            <set field="adkAgentConfig" from="[
+                adkAgentConfigId  : cfg.adkAgentConfigId,
+                agentName         : cfg.agentName,
+                modelName         : cfg.modelName,
+                instruction       : cfg.instruction,
+                description       : cfg.description,
+                enabled           : cfg.enabled == 'Y',
+                scheduleExpression: cfg.scheduleExpression,
+                scheduleEnabled   : cfg.scheduleEnabled == 'Y',
+                schedulePrompt    : cfg.schedulePrompt,
+                scheduleChatRoomId: cfg.scheduleChatRoomId,
+            ]"/>
+        </actions>
+    </service>
+
+    <service verb="update" noun="AdkAgentConfig">
+        <in-parameters>
+            <parameter name="adkAgentConfigId" required="true"/>
+            <parameter name="agentName"/>
+            <parameter name="modelName"/>
+            <parameter name="apiKey"/>
+            <parameter name="instruction"/>
+            <parameter name="description"/>
+            <parameter name="scheduleExpression"/>
+            <parameter name="scheduleEnabled" type="Boolean" default="false"/>
+            <parameter name="schedulePrompt"/>
+            <parameter name="scheduleChatRoomId"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="adkAgentConfig" type="Map"/>
+        </out-parameters>
+        <actions>
+            <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner"
+                out-map="context"/>
+            <entity-find-one entity-name="moqui.adk.AdkAgentConfig" value-field="existing"
+                auto-field-map="[adkAgentConfigId: adkAgentConfigId]"/>
+            <service-call name="AdkServices.update#AgentConfig" out-map="context"
+                in-map="[ownerPartyId: ownerPartyId,
+                          agentName: agentName ?: existing?.agentName,
+                          modelName: modelName ?: existing?.modelName,
+                          apiKey: apiKey,
+                          instruction: instruction,
+                          description: description,
+                          scheduleExpression: scheduleExpression,
+                          scheduleEnabled: scheduleEnabled ? 'Y' : 'N',
+                          schedulePrompt: schedulePrompt,
+                          scheduleChatRoomId: scheduleChatRoomId]"/>
+            <entity-find-one entity-name="moqui.adk.AdkAgentConfig" value-field="cfg"
+                auto-field-map="[adkAgentConfigId: adkAgentConfigId]"/>
+            <set field="adkAgentConfig" from="[
+                adkAgentConfigId  : cfg.adkAgentConfigId,
+                agentName         : cfg.agentName,
+                modelName         : cfg.modelName,
+                instruction       : cfg.instruction,
+                description       : cfg.description,
+                enabled           : cfg.enabled == 'Y',
+                scheduleExpression: cfg.scheduleExpression,
+                scheduleEnabled   : cfg.scheduleEnabled == 'Y',
+                schedulePrompt    : cfg.schedulePrompt,
+                scheduleChatRoomId: cfg.scheduleChatRoomId,
+            ]"/>
+        </actions>
+    </service>
+
+    <service verb="delete" noun="AdkAgentConfig">
+        <in-parameters>
+            <parameter name="adkAgentConfigId" required="true"/>
+        </in-parameters>
+        <actions>
+            <entity-find-one entity-name="moqui.adk.AdkAgentConfig" value-field="cfg"
+                auto-field-map="[adkAgentConfigId: adkAgentConfigId]"/>
+            <if condition="!cfg"><return/></if>
+            <set field="jobName" value="adk_scheduled_${adkAgentConfigId}"/>
+            <entity-find entity-name="moqui.service.job.ServiceJobParameter" list="jobParams">
+                <econdition field-name="jobName" from="jobName"/>
+            </entity-find>
+            <iterate list="jobParams" entry="jp"><entity-delete value-field="jp"/></iterate>
+            <entity-find entity-name="moqui.service.job.ServiceJobRunLock" list="jobLocks">
+                <econdition field-name="jobName" from="jobName"/>
+            </entity-find>
+            <iterate list="jobLocks" entry="jl"><entity-delete value-field="jl"/></iterate>
+            <entity-find entity-name="moqui.service.job.ServiceJobRun" list="jobRuns">
+                <econdition field-name="jobName" from="jobName"/>
+            </entity-find>
+            <iterate list="jobRuns" entry="jr"><entity-delete value-field="jr"/></iterate>
+            <entity-find entity-name="moqui.service.job.ServiceJob" list="jobs">
+                <econdition field-name="jobName" from="jobName"/>
+            </entity-find>
+            <iterate list="jobs" entry="j"><entity-delete value-field="j"/></iterate>
+            <entity-delete value-field="cfg"/>
+            <script>org.moqui.adk.AdkManager.destroy()</script>
+        </actions>
+    </service>
+
+    <service verb="get" noun="AdkJob">
+        <out-parameters>
+            <parameter name="adkJobs" type="List"/>
+        </out-parameters>
+        <actions>
+            <set field="adkJobs" from="[]"/>
+            <entity-find entity-name="moqui.service.job.ServiceJob" list="jobList">
+                <econdition field-name="jobName" operator="like" value="adk_scheduled_%"/>
+                <order-by field-name="jobName"/>
+            </entity-find>
+            <iterate list="jobList" entry="job">
+                <set field="jn" from="job.jobName"/>
+                <entity-find-one entity-name="moqui.service.job.ServiceJobRunLock"
+                    value-field="lock" auto-field-map="[jobName: jn]"/>
+                <entity-find entity-name="moqui.service.job.ServiceJobRun" list="runList">
+                    <econdition field-name="jobName" from="jn"/>
+                    <order-by field-name="-startTime"/>
+                    <limit>1</limit>
+                </entity-find>
+                <set field="latestRun" from="runList ? runList[0] : null"/>
+                <entity-find entity-name="moqui.service.job.ServiceJobParameter" list="paramList">
+                    <econdition field-name="jobName" from="jn"/>
+                    <econdition field-name="parameterName" value="adkAgentConfigId"/>
+                </entity-find>
+                <set field="configId" from="paramList ? paramList[0]?.parameterValue : null"/>
+                <set field="agentName" from="configId ?: jn"/>
+                <if condition="configId">
+                    <entity-find-one entity-name="moqui.adk.AdkAgentConfig" value-field="cfg"
+                        auto-field-map="[adkAgentConfigId: configId]"/>
+                    <if condition="cfg?.agentName"><set field="agentName" from="cfg.agentName"/></if>
+                </if>
+                <set field="isLocked" from="(lock != null &amp;&amp; lock.jobRunId != null) as boolean"/>
+                <set field="lockAgeMin" from="0"/>
+                <if condition="isLocked &amp;&amp; lock.lastRunTime">
+                    <set field="lockAgeMin"
+                        from="(System.currentTimeMillis() - lock.lastRunTime.time) / 60000 as int"/>
+                </if>
+                <set field="latestStatus" from="latestRun ? (latestRun.hasError == 'Y' ? 'error' : (latestRun.endTime ? 'complete' : 'running')) : 'never'"/>
+                <set field="jobOut" from="[
+                    jobName       : jn,
+                    agentName     : agentName,
+                    configId      : configId,
+                    cronExpression: job.cronExpression,
+                    paused        : job.paused == 'Y',
+                    isLocked      : isLocked,
+                    lockRunId     : lock?.jobRunId,
+                    lastRunTime   : lock?.lastRunTime?.toString(),
+                    lockAgeMin    : lockAgeMin,
+                    latestStatus  : latestStatus,
+                    latestStart   : latestRun?.startTime?.toString(),
+                    latestEnd     : latestRun?.endTime?.toString(),
+                    latestErrors  : latestRun?.errors,
+                ]"/>
+                <script>adkJobs.add(jobOut)</script>
+            </iterate>
+        </actions>
+    </service>
+
+    <service verb="update" noun="AdkJobLock">
+        <description>Clear a stale scheduler lock on an ADK job.</description>
+        <in-parameters>
+            <parameter name="jobName" required="true"/>
+        </in-parameters>
+        <actions>
+            <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner" out-map="context"/>
+            <entity-find-one entity-name="moqui.service.job.ServiceJobRunLock"
+                value-field="lock" for-update="true" auto-field-map="[jobName: jobName]"/>
+            <if condition="lock &amp;&amp; lock.jobRunId">
+                <entity-find-one entity-name="moqui.service.job.ServiceJobRun"
+                    value-field="run" for-update="true"
+                    auto-field-map="[jobRunId: lock.jobRunId]"/>
+                <if condition="run &amp;&amp; !run.endTime">
+                    <set field="run.endTime" from="ec.user.nowTimestamp"/>
+                    <entity-update value-field="run"/>
+                </if>
+                <set field="lock.jobRunId" from="null"/>
+                <entity-update value-field="lock"/>
+            </if>
+            <entity-find entity-name="mantle.party.Party" list="ownerParties">
+                <econdition field-name="ownerPartyId"/>
+                <econdition field-name="partyTypeEnumId" value="PtyPerson"/>
+            </entity-find>
+            <set field="uids" from="[] as Set"/>
+            <iterate list="ownerParties" entry="p">
+                <entity-find-one entity-name="moqui.security.UserAccount" value-field="ua"
+                    auto-field-map="[partyId: p.partyId]"/>
+                <if condition="ua?.userId"><script>uids.add(ua.userId as String)</script></if>
+            </iterate>
+            <if condition="uids">
+                <script>ec.makeNotificationMessage().topic('adkJobUpdate').userIds(uids)
+                    .message([jobName: jobName, status: 'lock_cleared']).send()</script>
+            </if>
+        </actions>
+    </service>
+
+    <service verb="update" noun="AdkJobPaused">
+        <description>Pause or resume a scheduled ADK job.</description>
+        <in-parameters>
+            <parameter name="jobName" required="true"/>
+            <parameter name="paused" type="Boolean" required="true"/>
+        </in-parameters>
+        <actions>
+            <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner" out-map="context"/>
+            <entity-find-one entity-name="moqui.service.job.ServiceJob"
+                value-field="job" for-update="true" auto-field-map="[jobName: jobName]"/>
+            <if condition="job">
+                <set field="job.paused" from="paused ? 'Y' : 'N'"/>
+                <entity-update value-field="job"/>
+            </if>
+            <entity-find entity-name="mantle.party.Party" list="ownerParties">
+                <econdition field-name="ownerPartyId"/>
+                <econdition field-name="partyTypeEnumId" value="PtyPerson"/>
+            </entity-find>
+            <set field="uids" from="[] as Set"/>
+            <iterate list="ownerParties" entry="p">
+                <entity-find-one entity-name="moqui.security.UserAccount" value-field="ua"
+                    auto-field-map="[partyId: p.partyId]"/>
+                <if condition="ua?.userId"><script>uids.add(ua.userId as String)</script></if>
+            </iterate>
+            <if condition="uids">
+                <script>ec.makeNotificationMessage().topic('adkJobUpdate').userIds(uids)
+                    .message([jobName: jobName, status: paused ? 'paused' : 'resumed']).send()</script>
+            </if>
+        </actions>
+    </service>
+
+</services>
