@@ -19,6 +19,7 @@
                     adkAgentConfigId  : cfg.adkAgentConfigId,
                     agentName         : cfg.agentName,
                     modelName         : cfg.modelName,
+                    llmProvider       : cfg.llmProvider ?: 'gemini',
                     instruction       : cfg.instruction,
                     description       : cfg.description,
                     enabled           : cfg.enabled == 'Y',
@@ -37,6 +38,7 @@
             <parameter name="agentName"/>
             <parameter name="modelName"/>
             <parameter name="apiKey"/>
+            <parameter name="llmProvider"/>
             <parameter name="instruction"/>
             <parameter name="description"/>
             <parameter name="scheduleExpression"/>
@@ -52,7 +54,7 @@
                 out-map="context"/>
             <service-call name="AdkServices.update#AgentConfig" out-map="context"
                 in-map="[ownerPartyId: ownerPartyId, agentName: agentName,
-                          modelName: modelName, apiKey: apiKey,
+                          modelName: modelName, apiKey: apiKey, llmProvider: llmProvider,
                           instruction: instruction, description: description,
                           scheduleExpression: scheduleExpression,
                           scheduleEnabled: scheduleEnabled ? 'Y' : 'N',
@@ -64,6 +66,7 @@
                 adkAgentConfigId  : cfg.adkAgentConfigId,
                 agentName         : cfg.agentName,
                 modelName         : cfg.modelName,
+                llmProvider       : cfg.llmProvider ?: 'gemini',
                 instruction       : cfg.instruction,
                 description       : cfg.description,
                 enabled           : cfg.enabled == 'Y',
@@ -81,6 +84,7 @@
             <parameter name="agentName"/>
             <parameter name="modelName"/>
             <parameter name="apiKey"/>
+            <parameter name="llmProvider"/>
             <parameter name="instruction"/>
             <parameter name="description"/>
             <parameter name="scheduleExpression"/>
@@ -100,7 +104,7 @@
                 in-map="[ownerPartyId: ownerPartyId,
                           agentName: agentName ?: existing?.agentName,
                           modelName: modelName ?: existing?.modelName,
-                          apiKey: apiKey,
+                          apiKey: apiKey, llmProvider: llmProvider,
                           instruction: instruction,
                           description: description,
                           scheduleExpression: scheduleExpression,
@@ -113,6 +117,7 @@
                 adkAgentConfigId  : cfg.adkAgentConfigId,
                 agentName         : cfg.agentName,
                 modelName         : cfg.modelName,
+                llmProvider       : cfg.llmProvider ?: 'gemini',
                 instruction       : cfg.instruction,
                 description       : cfg.description,
                 enabled           : cfg.enabled == 'Y',

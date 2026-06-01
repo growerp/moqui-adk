@@ -45,13 +45,15 @@ class AdkManager {
     static final String DEFAULT_CONFIG = '__default__'
 
     // configId → Runner (one per enabled AdkAgentConfig)
-    private static final Map<String, Runner>   registry       = new ConcurrentHashMap<>()
+    private static final Map<String, Runner>   registry         = new ConcurrentHashMap<>()
     // configId → LlmAgent — kept alongside Runner so runOneOff can build a fresh Runner
-    private static final Map<String, LlmAgent> agentRegistry  = new ConcurrentHashMap<>()
+    private static final Map<String, LlmAgent> agentRegistry    = new ConcurrentHashMap<>()
     // ownerPartyId → configId for per-tenant routing
-    private static final Map<String, String>  tenantRegistry = new ConcurrentHashMap<>()
+    private static final Map<String, String>   tenantRegistry   = new ConcurrentHashMap<>()
     // sessionId → configId — in-memory cache rebuilt on demand from DB after restart
-    private static final Map<String, String>  sessionOwn     = new ConcurrentHashMap<>()
+    private static final Map<String, String>   sessionOwn       = new ConcurrentHashMap<>()
+    // configId → {provider, apiKey} for non-Google providers (future HTTP runners)
+    private static final Map<String, Map>      providerRegistry = new ConcurrentHashMap<>()
 
     private static volatile MoquiSessionService sharedSessionService
     private static volatile com.google.adk.tools.mcp.McpToolset mcpToolset
@@ -86,7 +88,18 @@ Do not call any tool for this.
      */
     static synchronized void initConfig(String configId, String ownerPartyId,
                                         String agentName, String modelName,
-                                        String instruction, String apiKey) {
+                                        String instruction, String apiKey,
+                                        String llmProvider = 'gemini') {
+        String effectiveProvider = llmProvider ?: 'gemini'
+
+        // Non-Google providers: store in side registry for future HTTP runner; skip Google ADK init
+        if (effectiveProvider != 'gemini') {
+            providerRegistry[configId] = [provider: effectiveProvider, apiKey: apiKey ?: '']
+            if (ownerPartyId) tenantRegistry[ownerPartyId] = configId
+            logger.info("Non-Google provider '${effectiveProvider}' registered for configId='${configId}' (tenant='${ownerPartyId ?: 'global'}') — HTTP routing not yet implemented")
+            return
+        }
+
         if (apiKey) System.setProperty('GOOGLE_API_KEY', apiKey)
 
         if (mcpToolset == null) {
@@ -218,10 +231,32 @@ CRITICAL tool-use rules — follow exactly:
         } catch (Exception ignored) {}
 
         if (cfgList) {
-            for (def cfg in cfgList) {
-                initConfig(cfg.getString('adkAgentConfigId'), cfg.getString('ownerPartyId'),
-                        cfg.getString('agentName'), cfg.getString('modelName'),
-                        cfg.getString('instruction'), cfg.getString('apiKey'))
+            def ec2 = null
+            try {
+                ec2 = ecf.getExecutionContext()
+                ec2.artifactExecution.disableAuthz()
+                for (def cfg in cfgList) {
+                    String resolvedApiKey = cfg.getString('apiKey') ?: ''
+                    String provider = cfg.getString('llmProvider') ?: 'gemini'
+                    if (!resolvedApiKey) {
+                        def lc = ec2.entity.find('growerp.general.LlmConfig')
+                            .condition('ownerPartyId', cfg.getString('ownerPartyId'))
+                            .condition('llmProvider', provider).one()
+                        resolvedApiKey = lc?.getString('apiKey') ?: ''
+                    }
+                    initConfig(cfg.getString('adkAgentConfigId'), cfg.getString('ownerPartyId'),
+                            cfg.getString('agentName'), cfg.getString('modelName'),
+                            cfg.getString('instruction'), resolvedApiKey, provider)
+                }
+            } catch (Exception ignored) {
+                for (def cfg in cfgList) {
+                    initConfig(cfg.getString('adkAgentConfigId'), cfg.getString('ownerPartyId'),
+                            cfg.getString('agentName'), cfg.getString('modelName'),
+                            cfg.getString('instruction'), cfg.getString('apiKey') ?: '',
+                            cfg.getString('llmProvider') ?: 'gemini')
+                }
+            } finally {
+                ec2?.destroy()
             }
             return
         }
@@ -439,6 +474,7 @@ CRITICAL tool-use rules — follow exactly:
         agentRegistry.clear()
         tenantRegistry.clear()
         sessionOwn.clear()
+        providerRegistry.clear()
         sharedSessionService = null
         mcpApiKey = null
     }

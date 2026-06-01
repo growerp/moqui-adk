@@ -9,6 +9,7 @@
         <field name="agentName"   type="text-short"/>
         <field name="modelName"   type="text-short"/>
         <field name="apiKey"      type="text-medium"/>
+        <field name="llmProvider" type="text-short"/>
         <field name="instruction" type="text-long"/>
         <field name="description" type="text-short"/>
         <field name="enabled"          type="text-indicator"/>
