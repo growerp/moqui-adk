@@ -112,6 +112,8 @@ Do not call any tool for this.
         // FunctionTool.create returns List<FunctionTool> — build combined list then pass to tools()
         List allTools = new ArrayList()
         allTools.addAll(com.google.adk.tools.FunctionTool.create(HelloTimeAgent.class, 'getCurrentTime'))
+        allTools.addAll(com.google.adk.tools.FunctionTool.create(EmailTool.class, 'sendEmail'))
+        allTools.addAll(com.google.adk.tools.FunctionTool.create(EmailTool.class, 'readEmails'))
         if (mcpToolset) allTools.add(mcpToolset)
 
         if (!agentName) {
@@ -127,6 +129,8 @@ How to use the Moqui tools:
 - Use 'moqui_get_service_details' to learn a service's parameters.
 - Use 'moqui_execute_service' to run a service.
 - Use 'getCurrentTime' only when asked about the current time in a city.
+- Use 'sendEmail' to send email; always pass ownerPartyId from your context ({tenantId}). Returns an error if email is not configured for this tenant.
+- Use 'readEmails' to poll and read recent incoming email; always pass ownerPartyId from your context ({tenantId}). Returns an error if email is not configured.
 
 CRITICAL tool-use rules — follow exactly:
 - After a tool returns a result, NEVER call that same tool again with the same arguments.
