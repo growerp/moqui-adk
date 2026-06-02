@@ -9,5 +9,6 @@
 
     <entity-factory load-data="data/AdkSecuritySeedData.xml"/>
     <entity-factory load-data="data/AdkSchedulerData.xml"/>
+    <entity-factory load-data="data/CiMonitorAgentData.xml"/>
 
 </component>

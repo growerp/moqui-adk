@@ -127,6 +127,14 @@ Do not call any tool for this.
         allTools.addAll(com.google.adk.tools.FunctionTool.create(HelloTimeAgent.class, 'getCurrentTime'))
         allTools.addAll(com.google.adk.tools.FunctionTool.create(EmailTool.class, 'sendEmail'))
         allTools.addAll(com.google.adk.tools.FunctionTool.create(EmailTool.class, 'readEmails'))
+        allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'getLatestTestRun'))
+        allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'getTestExceptions'))
+        allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'getMainSha'))
+        allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'getFileContent'))
+        allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'createBranch'))
+        allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'updateFileContent'))
+        allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'createPullRequest'))
+        allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'addComment'))
         if (mcpToolset) allTools.add(mcpToolset)
 
         if (!agentName) {
