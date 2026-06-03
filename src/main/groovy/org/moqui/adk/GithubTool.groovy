@@ -34,8 +34,37 @@ class GithubTool {
     private static final String API_BASE = 'https://api.github.com'
     private static final String REPO     = 'growerp/growerp'
 
-    private static String resolveGithubToken() {
-        return System.getenv('GITHUB_TOKEN') ?: System.getProperty('growerp.github.token') ?: ''
+    private static String resolveGithubToken(String ownerPartyId = null) {
+        // 1. Prefer env var or cached system property (fastest, no DB hit)
+        String tok = System.getenv('GITHUB_TOKEN') ?: System.getProperty('growerp.github.token') ?: ''
+        if (tok) return tok
+
+        // 2. Fall back to DB lookup — scan SystemSettings for any tenant that has a token.
+        //    ownerPartyId param is a hint; if not supplied we scan all rows.
+        def ecf = AdkManager.sharedSessionService?.ecf
+        if (!ecf) return ''
+        def ec = ecf.getExecutionContext()
+        boolean wasDisabled = false
+        try {
+            ec.user.internalLoginUser('SystemSupport')
+            wasDisabled = ec.artifactExecution.disableAuthz()
+            def find = ec.entity.find('growerp.general.SystemSettings')
+            if (ownerPartyId) find = find.condition('ownerPartyId', ownerPartyId)
+            def rows = find.list()
+            for (def row in rows) {
+                String t = row.getString('githubToken')
+                if (t) {
+                    System.setProperty('growerp.github.token', t)  // cache for next call
+                    return t
+                }
+            }
+        } catch (Exception e) {
+            logger.error("Failed to retrieve githubToken from SystemSettings: ${e.message}", e)
+        } finally {
+            if (!wasDisabled) ec.artifactExecution.enableAuthz()
+            ec.destroy()
+        }
+        return ''
     }
 
     private static Map<String, Object> githubGet(String url, String token) {
@@ -83,13 +112,15 @@ class GithubTool {
     }
 
     @Schema(description = 'Get the latest failed GitHub Actions CI run for the growerp/growerp test workflow. Returns runId, status, conclusion, headCommitAuthor, headCommitEmail, headCommitMessage.')
-    static Map<String, Object> getLatestTestRun() {
+    static Map<String, Object> getLatestTestRun(
+            @Schema(name = 'ownerPartyId',
+                    description = 'Tenant owner party ID; pass {tenantId} from your context') String ownerPartyId = null) {
         Map<String, Object>[] result = [null]
         Throwable[] err = [null]
 
         Thread t = new Thread({
             try {
-                String token = resolveGithubToken()
+                String token = resolveGithubToken(ownerPartyId)
                 if (!token) { result[0] = [success: false, error: 'GITHUB_TOKEN not set']; return }
 
                 def resp = githubGet("${API_BASE}/repos/${REPO}/actions/workflows/test.yml/runs?per_page=5&status=failure", token)
@@ -138,7 +169,9 @@ class GithubTool {
             @Schema(name = 'runId',
                     description = 'GitHub Actions run ID from getLatestTestRun') String runId,
             @Schema(name = 'format',
-                    description = 'Test format to filter: mobile or desktop (optional, returns all if blank)') String format) {
+                    description = 'Test format to filter: mobile or desktop (optional, returns all if blank)') String format,
+            @Schema(name = 'ownerPartyId',
+                    description = 'Tenant owner party ID; pass {tenantId} from your context') String ownerPartyId = null) {
 
         if (!runId) return [success: false, error: 'runId is required']
 
@@ -147,7 +180,7 @@ class GithubTool {
 
         Thread t = new Thread({
             try {
-                String token = resolveGithubToken()
+                String token = resolveGithubToken(ownerPartyId)
                 if (!token) { result[0] = [success: false, error: 'GITHUB_TOKEN not set']; return }
 
                 // Find the summarize job for this run
@@ -278,13 +311,15 @@ class GithubTool {
     }
 
     @Schema(description = 'Get the HEAD commit SHA of the main branch in growerp/growerp. Use this SHA as fromSha when calling createBranch.')
-    static Map<String, Object> getMainSha() {
+    static Map<String, Object> getMainSha(
+            @Schema(name = 'ownerPartyId',
+                    description = 'Tenant owner party ID; pass {tenantId} from your context') String ownerPartyId = null) {
         Map<String, Object>[] result = [null]
         Throwable[] err = [null]
 
         Thread t = new Thread({
             try {
-                String token = resolveGithubToken()
+                String token = resolveGithubToken(ownerPartyId)
                 if (!token) { result[0] = [success: false, error: 'GITHUB_TOKEN not set']; return }
 
                 def resp = githubGet("${API_BASE}/repos/${REPO}/git/ref/heads/main", token)
@@ -310,7 +345,9 @@ class GithubTool {
             @Schema(name = 'path',
                     description = 'File path in repo, e.g. flutter/packages/growerp_catalog/lib/src/catalog_router.dart') String path,
             @Schema(name = 'ref',
-                    description = 'Branch name or commit SHA to read from') String ref) {
+                    description = 'Branch name or commit SHA to read from') String ref,
+            @Schema(name = 'ownerPartyId',
+                    description = 'Tenant owner party ID; pass {tenantId} from your context') String ownerPartyId = null) {
 
         if (!path) return [success: false, error: 'path is required']
 
@@ -319,7 +356,7 @@ class GithubTool {
 
         Thread t = new Thread({
             try {
-                String token = resolveGithubToken()
+                String token = resolveGithubToken(ownerPartyId)
                 if (!token) { result[0] = [success: false, error: 'GITHUB_TOKEN not set']; return }
 
                 String url = "${API_BASE}/repos/${REPO}/contents/${path}"
@@ -356,7 +393,9 @@ class GithubTool {
             @Schema(name = 'branchName',
                     description = 'New branch name, e.g. fix/ci-flutter-NoSuchMethodError-1717200000') String branchName,
             @Schema(name = 'fromSha',
-                    description = 'Commit SHA to branch from') String fromSha) {
+                    description = 'Commit SHA to branch from') String fromSha,
+            @Schema(name = 'ownerPartyId',
+                    description = 'Tenant owner party ID; pass {tenantId} from your context') String ownerPartyId = null) {
 
         if (!branchName) return [success: false, error: 'branchName is required']
         if (!fromSha)    return [success: false, error: 'fromSha is required']
@@ -366,7 +405,7 @@ class GithubTool {
 
         Thread t = new Thread({
             try {
-                String token = resolveGithubToken()
+                String token = resolveGithubToken(ownerPartyId)
                 if (!token) { result[0] = [success: false, error: 'GITHUB_TOKEN not set']; return }
 
                 def resp = githubPost("${API_BASE}/repos/${REPO}/git/refs", token,
@@ -399,7 +438,9 @@ class GithubTool {
             @Schema(name = 'sha',
                     description = 'Current file SHA from getFileContent (required for updates, omit for new files)') String sha,
             @Schema(name = 'branch',
-                    description = 'Branch name to commit to') String branch) {
+                    description = 'Branch name to commit to') String branch,
+            @Schema(name = 'ownerPartyId',
+                    description = 'Tenant owner party ID; pass {tenantId} from your context') String ownerPartyId = null) {
 
         if (!path)    return [success: false, error: 'path is required']
         if (!content) return [success: false, error: 'content is required']
@@ -410,7 +451,7 @@ class GithubTool {
 
         Thread t = new Thread({
             try {
-                String token = resolveGithubToken()
+                String token = resolveGithubToken(ownerPartyId)
                 if (!token) { result[0] = [success: false, error: 'GITHUB_TOKEN not set']; return }
 
                 String b64 = content.bytes.encodeBase64().toString()
@@ -453,7 +494,9 @@ class GithubTool {
             @Schema(name = 'head',
                     description = 'Source branch name') String head,
             @Schema(name = 'base',
-                    description = 'Target branch name, typically main') String base) {
+                    description = 'Target branch name, typically main') String base,
+            @Schema(name = 'ownerPartyId',
+                    description = 'Tenant owner party ID; pass {tenantId} from your context') String ownerPartyId = null) {
 
         if (!title) return [success: false, error: 'title is required']
         if (!head)  return [success: false, error: 'head is required']
@@ -463,7 +506,7 @@ class GithubTool {
 
         Thread t = new Thread({
             try {
-                String token = resolveGithubToken()
+                String token = resolveGithubToken(ownerPartyId)
                 if (!token) { result[0] = [success: false, error: 'GITHUB_TOKEN not set']; return }
 
                 def resp = githubPost("${API_BASE}/repos/${REPO}/pulls", token, [
@@ -498,7 +541,9 @@ class GithubTool {
             @Schema(name = 'prNumber',
                     description = 'Pull request or issue number as a string') String prNumber,
             @Schema(name = 'body',
-                    description = 'Comment body (markdown)') String body) {
+                    description = 'Comment body (markdown)') String body,
+            @Schema(name = 'ownerPartyId',
+                    description = 'Tenant owner party ID; pass {tenantId} from your context') String ownerPartyId = null) {
 
         if (!prNumber) return [success: false, error: 'prNumber is required']
         if (!body)     return [success: false, error: 'body is required']
@@ -508,7 +553,7 @@ class GithubTool {
 
         Thread t = new Thread({
             try {
-                String token = resolveGithubToken()
+                String token = resolveGithubToken(ownerPartyId)
                 if (!token) { result[0] = [success: false, error: 'GITHUB_TOKEN not set']; return }
 
                 def resp = githubPost("${API_BASE}/repos/${REPO}/issues/${prNumber}/comments", token, [body: body])

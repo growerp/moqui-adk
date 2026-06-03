@@ -174,6 +174,16 @@
                             if (ownerPartyId) {
                                 contextState.tenantId = ownerPartyId
 
+                                // Load githubToken from SystemSettings into system property
+                                // so GithubTool.resolveGithubToken() can find it without a compile.
+                                if (!System.getenv('GITHUB_TOKEN')) {
+                                    def ss = ec.entity.find('growerp.general.SystemSettings')
+                                        .condition('ownerPartyId', ownerPartyId).one()
+                                    if (ss?.githubToken) {
+                                        System.setProperty('growerp.github.token', ss.githubToken)
+                                    }
+                                }
+
                                 def companyList = ec.entity.find('mantle.party.PartyDetailAndRole')
                                     .condition('ownerPartyId', ownerPartyId)
                                     .condition('partyTypeEnumId', 'PtyOrganization')

@@ -84,31 +84,39 @@ catalog (JSON: widgetName, description, keywords, parameters):
 {screenCatalog}
 
 When the user wants to reach or operate a screen — phrases like "enter/create/add",
-"show/list/open/find", "approve", "receive" — respond with ONE short sentence and then
-append a fenced action block the app executes. Format (single object or an array):
+"show/list/open/find", "edit", "approve", "receive" — choose the best-matching entry from
+the catalog above (match the widgetName, keywords and description), respond with ONE short
+sentence, then append a fenced action block the app executes (single object or an array):
 ```growerp-action
-{"action":"navigate","widget":"<widgetName>","route":"<route>","params":{...},"label":"<chip text>"}
+{"action":"navigate","widget":"<widgetName>","params":{...},"label":"<chip text>"}
 ```
+
+Pick the action and widget from the catalog by intent:
+- VIEW / LIST a kind of record → action "navigate" to the matching *List widget
+  (omit `route`; the app resolves it from the widget name). e.g. "show products" →
+  {"action":"navigate","widget":"ProductList"}.
+- CREATE a new record → action "dialog" with that entity's *Dialog widget and NO id.
+  e.g. "add a product" → {"action":"dialog","widget":"ProductDialog"}.
+- OPEN / EDIT a specific record → action "dialog" with the *Dialog widget and the id in
+  `params`, using the id parameter NAMED in that widget's catalog `parameters` (e.g.
+  productId, partyId, locationId). e.g. "edit product DEMO_1" →
+  {"action":"dialog","widget":"ProductDialog","params":{"productId":"DEMO_1"}}.
+
 Rules:
-- `route` must be the actual menu route for that widget. If you do not know the route,
-  set `widget` only and omit `route` (the app resolves the route from the widget name).
-- Put extra inputs in `params` (they become the route query string), e.g. {"openNew":true}.
-- Use `"action":"dialog"` to pop a widget directly in a dialog instead of navigating.
+- Use only widgetNames present in the catalog; read each widget's `parameters` for the
+  exact arg names it accepts. Put extra inputs in `params`.
+- `route` is optional and usually omitted (the app resolves it from the widget name).
 - Emit the block ONLY when a screen should open; otherwise just answer in text.
 
-Intent → directive mapping (use the catalog to confirm widget names/params):
-- "enter/create a sales order"   → widget SalesOrderList,    params {"openNew":true}
-- "enter/create a purchase order" → widget PurchaseOrderList, params {"openNew":true}
-- "show/list incoming shipments" → widget IncomingShipmentList (no params)
-- "approve order <id>"           → widget Sales/PurchaseOrderList,
-                                    params {"finDocId":"<id>","presetStatus":"approved"}
-- "receive shipment <id>"        → widget IncomingShipmentList, params {"finDocId":"<id>"}
+Resolve a record the user names (not by id) with read-only tools first
+(moqui_search_services / moqui_execute_service) to find its id, then emit the directive.
 
-WRITES ARE USER-CONFIRMED: for approve/receive you NAVIGATE only — never call a service
-that performs the write (e.g. do NOT call approve#Order or receive#Shipment). You MAY use
-moqui_search_services / moqui_execute_service to look up an id the user referenced by name
-(e.g. find the order/shipment for "Acme"), then emit the navigate directive. The user
-completes the action on the opened, pre-filled screen.
+WRITES ARE USER-CONFIRMED: you only NAVIGATE / OPEN screens — never call a service that
+performs a write (create/update/approve/receive/delete). The user submits the opened,
+pre-filled dialog. Order/shipment specifics still work: "enter a sales order" →
+{"widget":"SalesOrderList","params":{"openNew":true}}; "approve order <id>" →
+{"widget":"SalesOrderList","params":{"finDocId":"<id>","presetStatus":"approved"}};
+"receive shipment <id>" → {"widget":"IncomingShipmentList","params":{"finDocId":"<id>"}}.
 
 '''
 
@@ -184,6 +192,7 @@ How to use the Moqui tools:
 - Use 'getCurrentTime' only when asked about the current time in a city.
 - Use 'sendEmail' to send email; always pass ownerPartyId from your context ({tenantId}). Returns an error if email is not configured for this tenant.
 - Use 'readEmails' to poll and read recent incoming email; always pass ownerPartyId from your context ({tenantId}). Returns an error if email is not configured.
+- Use the GitHub tools ('getLatestTestRun', 'getTestExceptions', 'getMainSha', 'getFileContent', 'createBranch', 'updateFileContent', 'createPullRequest', 'addComment') to interact with GitHub. Always pass ownerPartyId from your context ({tenantId}) so that the tenant's GitHub token configuration is retrieved.
 
 CRITICAL tool-use rules — follow exactly:
 - After a tool returns a result, NEVER call that same tool again with the same arguments.
@@ -270,6 +279,12 @@ CRITICAL tool-use rules — follow exactly:
             finally { if (!wasDisabled) ec.artifactExecution.enableAuthz() }
         } catch (Exception ignored) {}
 
+        // Key to use for the general default agent (env, else borrowed from a config).
+        String defaultKey = System.getenv('GOOGLE_API_KEY') ?:
+                            System.getenv('GOOGLE_GENAI_API_KEY') ?:
+                            System.getenv('GEMINI_API_KEY') ?: ''
+        String defaultModel = 'gemini-2.5-flash'
+
         if (cfgList) {
             def ec2 = null
             try {
@@ -284,12 +299,17 @@ CRITICAL tool-use rules — follow exactly:
                             .condition('llmProvider', provider).one()
                         resolvedApiKey = lc?.getString('apiKey') ?: ''
                     }
+                    if (!defaultKey && resolvedApiKey && provider == 'gemini') {
+                        defaultKey = resolvedApiKey
+                        if (cfg.getString('modelName')) defaultModel = cfg.getString('modelName')
+                    }
                     initConfig(cfg.getString('adkAgentConfigId'), cfg.getString('ownerPartyId'),
                             cfg.getString('agentName'), cfg.getString('modelName'),
                             cfg.getString('instruction'), resolvedApiKey, provider)
                 }
             } catch (Exception ignored) {
                 for (def cfg in cfgList) {
+                    if (!defaultKey && cfg.getString('apiKey')) defaultKey = cfg.getString('apiKey')
                     initConfig(cfg.getString('adkAgentConfigId'), cfg.getString('ownerPartyId'),
                             cfg.getString('agentName'), cfg.getString('modelName'),
                             cfg.getString('instruction'), cfg.getString('apiKey') ?: '',
@@ -298,13 +318,14 @@ CRITICAL tool-use rules — follow exactly:
             } finally {
                 ec2?.destroy()
             }
-            return
         }
 
-        String envKey = System.getenv('GOOGLE_API_KEY') ?:
-                        System.getenv('GOOGLE_GENAI_API_KEY') ?:
-                        System.getenv('GEMINI_API_KEY') ?: ''
-        initConfig(DEFAULT_CONFIG, null, null, 'gemini-2.5-flash', '', envKey)
+        // Always register a general-purpose default agent for INTERACTIVE CHAT, so chat
+        // sessions are not served by a specialised/scheduled agent (e.g. the CI Monitor,
+        // whose task instruction makes general questions return empty/odd answers).
+        if (!registry.containsKey(DEFAULT_CONFIG)) {
+            initConfig(DEFAULT_CONFIG, null, null, defaultModel, '', defaultKey)
+        }
     }
 
     static boolean isInitialized() { !registry.isEmpty() }
