@@ -78,6 +78,38 @@ Use this context when the user asks questions like "who am I?", "what company is
 The current logged in user is {username} ({userFullName}). You are part of the {organizationName} organization (ID: {companyPseudoId}, owner: {tenantId}).
 Do not call any tool for this.
 
+SCREEN NAVIGATION — opening operational app screens
+The GrowERP front-end (Flutter) screens available in this session are listed in this
+catalog (JSON: widgetName, description, keywords, parameters):
+{screenCatalog}
+
+When the user wants to reach or operate a screen — phrases like "enter/create/add",
+"show/list/open/find", "approve", "receive" — respond with ONE short sentence and then
+append a fenced action block the app executes. Format (single object or an array):
+```growerp-action
+{"action":"navigate","widget":"<widgetName>","route":"<route>","params":{...},"label":"<chip text>"}
+```
+Rules:
+- `route` must be the actual menu route for that widget. If you do not know the route,
+  set `widget` only and omit `route` (the app resolves the route from the widget name).
+- Put extra inputs in `params` (they become the route query string), e.g. {"openNew":true}.
+- Use `"action":"dialog"` to pop a widget directly in a dialog instead of navigating.
+- Emit the block ONLY when a screen should open; otherwise just answer in text.
+
+Intent → directive mapping (use the catalog to confirm widget names/params):
+- "enter/create a sales order"   → widget SalesOrderList,    params {"openNew":true}
+- "enter/create a purchase order" → widget PurchaseOrderList, params {"openNew":true}
+- "show/list incoming shipments" → widget IncomingShipmentList (no params)
+- "approve order <id>"           → widget Sales/PurchaseOrderList,
+                                    params {"finDocId":"<id>","presetStatus":"approved"}
+- "receive shipment <id>"        → widget IncomingShipmentList, params {"finDocId":"<id>"}
+
+WRITES ARE USER-CONFIRMED: for approve/receive you NAVIGATE only — never call a service
+that performs the write (e.g. do NOT call approve#Order or receive#Shipment). You MAY use
+moqui_search_services / moqui_execute_service to look up an id the user referenced by name
+(e.g. find the order/shipment for "Acme"), then emit the navigate directive. The user
+completes the action on the opened, pre-filled screen.
+
 '''
 
     // ── Initialisation ────────────────────────────────────────────────────────
@@ -368,6 +400,9 @@ CRITICAL tool-use rules — follow exactly:
         // that ADK resolves from session state. Seed state with these keys so injectSessionState
         // does not throw "Context variable not found".
         def state = new java.util.concurrent.ConcurrentHashMap<String, Object>(initialState ?: [:])
+        // {screenCatalog} appears in the instruction preamble; scheduled/one-off runs
+        // have no Flutter client, so default it to avoid "Context variable not found".
+        state.putIfAbsent('screenCatalog', '[]')
 
         def inMemSvc = new InMemorySessionService()
         def session  = inMemSvc.createSession(APP_NAME, userId, state, null).blockingGet()

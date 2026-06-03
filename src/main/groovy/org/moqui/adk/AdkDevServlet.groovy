@@ -110,7 +110,21 @@ class AdkDevServlet extends HttpServlet {
 
         switch (method) {
             case 'POST':
-                json(resp, AdkManager.createSession(userId, buildContext(req, resp)))
+                // Read body FIRST (before buildContext → initWebFacade calls getReader);
+                // the client may seed session state (e.g. screenCatalog) here.
+                Map clientState = [:]
+                try {
+                    String rawBody = req.reader.text
+                    if (rawBody) {
+                        def parsed = new JsonSlurper().parseText(rawBody)
+                        if (parsed instanceof Map && parsed.state instanceof Map) {
+                            clientState = parsed.state as Map
+                        }
+                    }
+                } catch (Exception ignored) {}
+                Map<String, Object> initialState = buildContext(req, resp)
+                initialState.putAll(clientState)
+                json(resp, AdkManager.createSession(userId, initialState))
                 break
             case 'GET':
 
@@ -329,6 +343,9 @@ class AdkDevServlet extends HttpServlet {
             tenantId        : 'DEFAULT',
             timeZone        : 'UTC',
             locale          : 'en_US',
+            // Default for the {screenCatalog} instruction placeholder; the Flutter
+            // client overrides this with the real catalog on session create.
+            screenCatalog   : '[]',
         ]
         try {
             ExecutionContextFactory ecf = ecf(req)
