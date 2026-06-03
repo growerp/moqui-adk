@@ -151,7 +151,7 @@ completes the action on the opened, pre-filled screen.
             mcpToolset = new com.google.adk.tools.mcp.McpToolset(sseParams)
         }
 
-        String envModel = System.getenv('GEMINI_MODEL') ?: System.getProperty('GEMINI_MODEL') ?: 'gemini-2.0-flash'
+        String envModel = System.getenv('GEMINI_MODEL') ?: System.getProperty('GEMINI_MODEL') ?: 'gemini-2.5-flash'
         LlmAgent agent
 
         // FunctionTool.create returns List<FunctionTool> — build combined list then pass to tools()
@@ -304,7 +304,7 @@ CRITICAL tool-use rules — follow exactly:
         String envKey = System.getenv('GOOGLE_API_KEY') ?:
                         System.getenv('GOOGLE_GENAI_API_KEY') ?:
                         System.getenv('GEMINI_API_KEY') ?: ''
-        initConfig(DEFAULT_CONFIG, null, null, 'gemini-2.0-flash', '', envKey)
+        initConfig(DEFAULT_CONFIG, null, null, 'gemini-2.5-flash', '', envKey)
     }
 
     static boolean isInitialized() { !registry.isEmpty() }

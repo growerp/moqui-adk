@@ -8,7 +8,7 @@
         ownerPartyId="GROWERP"
         adkAgentConfigId="CI_MONITOR_AGENT"
         agentName="GrowERP CI Monitor"
-        modelName="gemini-2.0-flash"
+        modelName="gemini-2.5-flash"
         llmProvider="gemini"
         enabled="Y"
         scheduleEnabled="N"
