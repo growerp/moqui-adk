@@ -31,8 +31,14 @@ class GithubTool {
 
     protected static final Logger logger = LoggerFactory.getLogger(GithubTool.class)
 
-    private static final String API_BASE = 'https://api.github.com'
-    private static final String REPO     = 'growerp/growerp'
+    private static final String API_BASE        = 'https://api.github.com'
+    private static final String DEFAULT_REPO    = 'growerp/growerp'
+
+    private static String resolveRepo() {
+        return System.getenv('GITHUB_REPO') ?:
+               System.getProperty('growerp.github.repo') ?:
+               DEFAULT_REPO
+    }
 
     private static String resolveGithubToken(String ownerPartyId = null) {
         // 1. Prefer env var or cached system property (fastest, no DB hit)
@@ -123,7 +129,7 @@ class GithubTool {
                 String token = resolveGithubToken(ownerPartyId)
                 if (!token) { result[0] = [success: false, error: 'GITHUB_TOKEN not set']; return }
 
-                def resp = githubGet("${API_BASE}/repos/${REPO}/actions/workflows/test.yml/runs?per_page=5&status=failure", token)
+                def resp = githubGet("${API_BASE}/repos/${resolveRepo()}/actions/workflows/test.yml/runs?per_page=5&status=failure", token)
                 if (resp.code < 0 || resp.code >= 400) {
                     result[0] = [success: false, error: "GitHub API error ${resp.code}: ${resp.body}"]
                     return
@@ -131,7 +137,7 @@ class GithubTool {
 
                 def runs = resp.parsed?.workflow_runs
                 if (!runs) {
-                    resp = githubGet("${API_BASE}/repos/${REPO}/actions/workflows/test.yml/runs?per_page=1&status=completed", token)
+                    resp = githubGet("${API_BASE}/repos/${resolveRepo()}/actions/workflows/test.yml/runs?per_page=1&status=completed", token)
                     runs = resp.parsed?.workflow_runs
                 }
 
@@ -184,7 +190,7 @@ class GithubTool {
                 if (!token) { result[0] = [success: false, error: 'GITHUB_TOKEN not set']; return }
 
                 // Find the summarize job for this run
-                def resp = githubGet("${API_BASE}/repos/${REPO}/actions/runs/${runId}/jobs?per_page=50", token)
+                def resp = githubGet("${API_BASE}/repos/${resolveRepo()}/actions/runs/${runId}/jobs?per_page=50", token)
                 if (resp.code < 0 || resp.code >= 400) {
                     result[0] = [success: false, error: "Jobs list error ${resp.code}: ${resp.body}"]
                     return
@@ -201,7 +207,7 @@ class GithubTool {
                 long jobId = summarizeJob.id as long
 
                 // Job log endpoint returns 302 redirect to plain-text log
-                HttpURLConnection step1 = (HttpURLConnection) new URL("${API_BASE}/repos/${REPO}/actions/jobs/${jobId}/logs").openConnection()
+                HttpURLConnection step1 = (HttpURLConnection) new URL("${API_BASE}/repos/${resolveRepo()}/actions/jobs/${jobId}/logs").openConnection()
                 step1.setRequestMethod('GET')
                 step1.setRequestProperty('Authorization', "Bearer ${token}")
                 step1.setRequestProperty('Accept', 'application/vnd.github+json')
@@ -322,7 +328,7 @@ class GithubTool {
                 String token = resolveGithubToken(ownerPartyId)
                 if (!token) { result[0] = [success: false, error: 'GITHUB_TOKEN not set']; return }
 
-                def resp = githubGet("${API_BASE}/repos/${REPO}/git/ref/heads/main", token)
+                def resp = githubGet("${API_BASE}/repos/${resolveRepo()}/git/ref/heads/main", token)
                 if (resp.code < 0 || resp.code >= 400) {
                     result[0] = [success: false, error: "GitHub API error ${resp.code}: ${resp.body}"]
                     return
@@ -359,7 +365,7 @@ class GithubTool {
                 String token = resolveGithubToken(ownerPartyId)
                 if (!token) { result[0] = [success: false, error: 'GITHUB_TOKEN not set']; return }
 
-                String url = "${API_BASE}/repos/${REPO}/contents/${path}"
+                String url = "${API_BASE}/repos/${resolveRepo()}/contents/${path}"
                 if (ref) url += "?ref=${URLEncoder.encode(ref, 'UTF-8')}"
                 def resp = githubGet(url, token)
                 if (resp.code < 0 || resp.code >= 400) {
@@ -408,7 +414,7 @@ class GithubTool {
                 String token = resolveGithubToken(ownerPartyId)
                 if (!token) { result[0] = [success: false, error: 'GITHUB_TOKEN not set']; return }
 
-                def resp = githubPost("${API_BASE}/repos/${REPO}/git/refs", token,
+                def resp = githubPost("${API_BASE}/repos/${resolveRepo()}/git/refs", token,
                         [ref: "refs/heads/${branchName}", sha: fromSha])
                 if (resp.code < 0 || resp.code >= 400) {
                     result[0] = [success: false, error: "GitHub API error ${resp.code}: ${resp.body}"]
@@ -462,7 +468,7 @@ class GithubTool {
                 ]
                 if (sha) payload.sha = sha
 
-                def resp = githubPost("${API_BASE}/repos/${REPO}/contents/${path}", token, payload, 'PUT')
+                def resp = githubPost("${API_BASE}/repos/${resolveRepo()}/contents/${path}", token, payload, 'PUT')
                 if (resp.code < 0 || resp.code >= 400) {
                     result[0] = [success: false, error: "GitHub API error ${resp.code}: ${resp.body}"]
                     return
@@ -509,7 +515,7 @@ class GithubTool {
                 String token = resolveGithubToken(ownerPartyId)
                 if (!token) { result[0] = [success: false, error: 'GITHUB_TOKEN not set']; return }
 
-                def resp = githubPost("${API_BASE}/repos/${REPO}/pulls", token, [
+                def resp = githubPost("${API_BASE}/repos/${resolveRepo()}/pulls", token, [
                     title: title,
                     body : body ?: '',
                     head : head,
@@ -556,7 +562,7 @@ class GithubTool {
                 String token = resolveGithubToken(ownerPartyId)
                 if (!token) { result[0] = [success: false, error: 'GITHUB_TOKEN not set']; return }
 
-                def resp = githubPost("${API_BASE}/repos/${REPO}/issues/${prNumber}/comments", token, [body: body])
+                def resp = githubPost("${API_BASE}/repos/${resolveRepo()}/issues/${prNumber}/comments", token, [body: body])
                 if (resp.code < 0 || resp.code >= 400) {
                     result[0] = [success: false, error: "GitHub API error ${resp.code}: ${resp.body}"]
                     return

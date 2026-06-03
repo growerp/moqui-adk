@@ -182,6 +182,9 @@
                                     if (ss?.githubToken) {
                                         System.setProperty('growerp.github.token', ss.githubToken)
                                     }
+                                    if (ss?.githubRepository) {
+                                        System.setProperty('growerp.github.repo', ss.githubRepository)
+                                    }
                                 }
 
                                 def companyList = ec.entity.find('mantle.party.PartyDetailAndRole')
