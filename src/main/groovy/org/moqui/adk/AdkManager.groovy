@@ -152,8 +152,9 @@ pre-filled dialog. Order/shipment specifics still work: "enter a sales order" â†
             } else {
                 sseHeaders['Authorization'] = 'Basic ' + 'SystemSupport:moqui'.bytes.encodeBase64().toString()
             }
+            String mcpInternalPort = System.getenv('webapp_http_port') ?: '8080'
             def sseParams = com.google.adk.tools.mcp.SseServerParameters.builder()
-                    .url('http://localhost:8080/mcp/sse')
+                    .url("http://localhost:${mcpInternalPort}/mcp/sse")
                     .headers(sseHeaders)
                     .build()
             mcpToolset = new com.google.adk.tools.mcp.McpToolset(sseParams)
