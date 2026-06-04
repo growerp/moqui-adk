@@ -59,6 +59,9 @@ class AdkDevServlet extends HttpServlet {
         String pathInfo = req.pathInfo ?: '/'
         String method   = req.method
 
+        addCorsHeaders(req, resp)
+        if (method == 'OPTIONS') { resp.status = 204; return }
+
         resp.setHeader('Cache-Control', 'no-cache, no-store')
 
         // ── API routes ────────────────────────────────────────────────────────
@@ -324,6 +327,20 @@ class AdkDevServlet extends HttpServlet {
 
     private ExecutionContextFactory ecf(HttpServletRequest req) {
         (ExecutionContextFactory) req.servletContext.getAttribute('executionContextFactory')
+    }
+
+    private static void addCorsHeaders(HttpServletRequest req, HttpServletResponse resp) {
+        String origin = req.getHeader('Origin')
+        if (origin) {
+            resp.setHeader('Access-Control-Allow-Origin', origin)
+            resp.setHeader('Access-Control-Allow-Credentials', 'true')
+            resp.setHeader('Vary', 'Origin')
+        } else {
+            resp.setHeader('Access-Control-Allow-Origin', '*')
+        }
+        resp.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
+        resp.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, api_key, moquiSessionToken')
+        resp.setHeader('Access-Control-Max-Age', '3600')
     }
 
     /**
