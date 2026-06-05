@@ -161,6 +161,13 @@ pre-filled dialog. Order/shipment specifics still work: "enter a sales order" �
         }
 
         String envModel = System.getenv('GEMINI_MODEL') ?: System.getProperty('GEMINI_MODEL') ?: 'gemini-2.5-flash'
+        String modelId = modelName ?: envModel
+        // google-genai reads the key from the GOOGLE_API_KEY/GEMINI_API_KEY *environment*
+        // variable (not a System property), so a key from System Setup must be passed to the
+        // Gemini model explicitly. Fall back to the model-name String (env-based) when no key.
+        def modelArg = apiKey ?
+                com.google.adk.models.Gemini.builder().modelName(modelId).apiKey(apiKey).build() :
+                modelId
         LlmAgent agent
 
         // FunctionTool.create returns List<FunctionTool> — build combined list then pass to tools()
@@ -201,13 +208,13 @@ CRITICAL tool-use rules — follow exactly:
   a final, concise natural-language answer for the user (e.g. list the service names you found).
 - Make at most a few tool calls per question; if you already have an answer, just answer.
 ''')
-                .model(modelName ?: envModel)
+                .model(modelArg)
                 .tools(allTools)
                 .build()
         } else {
             agent = LlmAgent.builder()
                     .name(agentName)
-                    .model(modelName ?: envModel)
+                    .model(modelArg)
                     .instruction(CONTEXT_PREAMBLE + (instruction ?: ''))
                     .tools(allTools)
                     .build()
@@ -324,9 +331,54 @@ CRITICAL tool-use rules — follow exactly:
         // Always register a general-purpose default agent for INTERACTIVE CHAT, so chat
         // sessions are not served by a specialised/scheduled agent (e.g. the CI Monitor,
         // whose task instruction makes general questions return empty/odd answers).
-        if (!registry.containsKey(DEFAULT_CONFIG)) {
-            initConfig(DEFAULT_CONFIG, null, null, defaultModel, '', defaultKey)
+        ensureInteractiveDefault(ecf, defaultKey, defaultModel)
+    }
+
+    /// Register the shared DEFAULT_CONFIG runner used for interactive chat, deriving
+    /// its key from (in order) [seedKey], env vars, then the gemini growerp.general.LlmConfig.
+    /// No-op when the runner already exists. Called by lazyInit and reloadInteractive.
+    private static void ensureInteractiveDefault(ExecutionContextFactory ecf, String seedKey = null,
+                                                 String model = 'gemini-2.5-flash') {
+        if (registry.containsKey(DEFAULT_CONFIG)) return
+        // Precedence for the shared interactive runner: explicit env var → key saved via
+        // System Setup (growerp.general.LlmConfig) → key borrowed from a specialised agent
+        // (seedKey). The System Setup key must win over a specialised agent's key (e.g. the
+        // CI Monitor) so general chat uses the tenant's own key, not the monitor's.
+        String defaultKey = System.getenv('GOOGLE_API_KEY') ?:
+                            System.getenv('GOOGLE_GENAI_API_KEY') ?:
+                            System.getenv('GEMINI_API_KEY') ?: ''
+        if (!defaultKey) {
+            try {
+                def ec = ecf.getExecutionContext()
+                boolean wasDisabled = ec.artifactExecution.disableAuthz()
+                try {
+                    def lcList = ec.entity.find('growerp.general.LlmConfig')
+                            .condition('llmProvider', 'gemini').list()
+                    for (def lc in lcList) {
+                        String k = lc.getString('apiKey')
+                        if (k) { defaultKey = k; break }
+                    }
+                    logger.info("ensureInteractiveDefault: LlmConfig gemini rows={}, keyFound={}",
+                            lcList?.size() ?: 0, (defaultKey ? true : false))
+                } finally { if (!wasDisabled) ec.artifactExecution.enableAuthz() }
+            } catch (Exception e) {
+                logger.error("ensureInteractiveDefault: LlmConfig lookup failed: ${e.message}", e)
+            }
         }
+        if (!defaultKey) defaultKey = seedKey ?: ''
+        logger.info("ensureInteractiveDefault: registering __default__ hasKey={} (seedKeyPresent={})",
+                (defaultKey ? true : false), (seedKey ? true : false))
+        initConfig(DEFAULT_CONFIG, null, null, model, '', defaultKey)
+    }
+
+    /// Drop the shared interactive/default runner and re-create it so a key change
+    /// (e.g. saved in System Setup) takes effect on the next chat without a restart.
+    /// Scheduled/specialised agent runners and the MCP toolset are left intact.
+    static synchronized void reloadInteractive(ExecutionContextFactory ecf) {
+        registry.remove(DEFAULT_CONFIG)
+        agentRegistry.remove(DEFAULT_CONFIG)
+        currentConfig = [:]
+        ensureInteractiveDefault(ecf)
     }
 
     static boolean isInitialized() { !registry.isEmpty() }

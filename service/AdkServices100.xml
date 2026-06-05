@@ -159,6 +159,14 @@
         </actions>
     </service>
 
+    <!-- Re-create the interactive chat runner so a newly saved LLM key (e.g. from
+         System Setup → LlmConfig) takes effect without a backend restart. -->
+    <service verb="reload" noun="Adk">
+        <actions>
+            <script>org.moqui.adk.AdkManager.reloadInteractive(ec.factory)</script>
+        </actions>
+    </service>
+
     <service verb="get" noun="AdkJob">
         <out-parameters>
             <parameter name="adkJobs" type="List"/>

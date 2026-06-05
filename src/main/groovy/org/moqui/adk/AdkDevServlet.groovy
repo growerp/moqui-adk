@@ -20,6 +20,8 @@ import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 import org.moqui.context.ExecutionContextFactory
 import org.moqui.resource.ResourceReference
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 
 /**
  * Serves the ADK Angular DevUI at /adk/* together with the ADK REST API.
@@ -36,6 +38,8 @@ import org.moqui.resource.ResourceReference
  *   POST /run_sse    — Server-Sent Events stream
  */
 class AdkDevServlet extends HttpServlet {
+
+    private static final Logger logger = LoggerFactory.getLogger(AdkDevServlet.class)
 
     static final String STATIC_ROOT = 'component://moqui-adk/screen/adk-ui'
 
@@ -168,7 +172,10 @@ class AdkDevServlet extends HttpServlet {
                     writer.flush()
                 },
                 { Throwable err ->
-                    if (err) writer.write("data: ${JsonOutput.toJson([error: err.message])}\n\n")
+                    if (err) {
+                        logger.error("ADK run_sse error (session=${sid}): ${err.message}", err)
+                        writer.write("data: ${JsonOutput.toJson([error: err.message])}\n\n")
+                    }
                     writer.write("data: [DONE]\n\n")
                     writer.flush()
                 }
