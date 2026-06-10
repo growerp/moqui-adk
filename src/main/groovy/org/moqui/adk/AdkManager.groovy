@@ -57,6 +57,9 @@ class AdkManager {
 
     private static volatile MoquiSessionService sharedSessionService
     private static volatile com.google.adk.tools.mcp.McpToolset mcpToolset
+    // configId → per-agent McpToolset. Each carries an `adk_config_id` header so the
+    // MCP governance gate can identify the calling agent and enforce its tenant/scope.
+    private static final Map<String, com.google.adk.tools.mcp.McpToolset> configMcpToolsets = new ConcurrentHashMap<>()
     private static volatile String mcpApiKey = null
     static  volatile Map<String, Object>  currentConfig = [:]
 
@@ -142,23 +145,9 @@ pre-filled dialog. Order/shipment specifics still work: "enter a sales order" �
 
         if (apiKey) System.setProperty('GOOGLE_API_KEY', apiKey)
 
-        if (mcpToolset == null) {
-            if (mcpApiKey == null && sharedSessionService != null) {
-                mcpApiKey = generateMcpApiKey(sharedSessionService.ecf)
-            }
-            Map<String, String> sseHeaders = ['Accept': 'application/json, text/event-stream']
-            if (mcpApiKey) {
-                sseHeaders['api_key'] = mcpApiKey
-            } else {
-                sseHeaders['Authorization'] = 'Basic ' + 'SystemSupport:moqui'.bytes.encodeBase64().toString()
-            }
-            String mcpInternalPort = System.getenv('webapp_http_port') ?: '8080'
-            def sseParams = com.google.adk.tools.mcp.SseServerParameters.builder()
-                    .url("http://localhost:${mcpInternalPort}/mcp/sse")
-                    .headers(sseHeaders)
-                    .build()
-            mcpToolset = new com.google.adk.tools.mcp.McpToolset(sseParams)
-        }
+        // Per-agent MCP toolset: identical to the shared one but tagged with this config's
+        // id so the MCP governance gate knows which agent (and tenant) is calling.
+        def agentMcpToolset = buildMcpToolset(configId)
 
         String envModel = System.getenv('GEMINI_MODEL') ?: System.getProperty('GEMINI_MODEL') ?: 'gemini-2.5-flash'
         String modelId = modelName ?: envModel
@@ -170,20 +159,30 @@ pre-filled dialog. Order/shipment specifics still work: "enter a sales order" �
                 modelId
         LlmAgent agent
 
+        // Read this agent's scoping so the in-process FunctionTools (Email/GitHub) honour it
+        // too — a read-only agent gets no write tools. (The MCP toolset is gated server-side
+        // by the governance service.)
+        String toolMode = lookupToolMode(configId)
+        boolean allowWrites = toolMode != 'readOnly'
+
         // FunctionTool.create returns List<FunctionTool> — build combined list then pass to tools()
         List allTools = new ArrayList()
         allTools.addAll(com.google.adk.tools.FunctionTool.create(HelloTimeAgent.class, 'getCurrentTime'))
-        allTools.addAll(com.google.adk.tools.FunctionTool.create(EmailTool.class, 'sendEmail'))
+        // Read-only custom tools
         allTools.addAll(com.google.adk.tools.FunctionTool.create(EmailTool.class, 'readEmails'))
         allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'getLatestTestRun'))
         allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'getTestExceptions'))
         allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'getMainSha'))
         allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'getFileContent'))
-        allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'createBranch'))
-        allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'updateFileContent'))
-        allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'createPullRequest'))
-        allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'addComment'))
-        if (mcpToolset) allTools.add(mcpToolset)
+        // Write/side-effect custom tools — only for non-read-only agents
+        if (allowWrites) {
+            allTools.addAll(com.google.adk.tools.FunctionTool.create(EmailTool.class, 'sendEmail'))
+            allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'createBranch'))
+            allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'updateFileContent'))
+            allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'createPullRequest'))
+            allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'addComment'))
+        }
+        if (agentMcpToolset) allTools.add(agentMcpToolset)
 
         if (!agentName) {
             agent = LlmAgent.builder()
@@ -577,7 +576,58 @@ CRITICAL tool-use rules — follow exactly:
         m
     }
 
+    /** Build a per-agent MCP toolset whose SSE headers carry `adk_config_id` so the
+     *  governance gate on the MCP server can resolve the calling agent and its tenant. */
+    private static com.google.adk.tools.mcp.McpToolset buildMcpToolset(String configId) {
+        if (mcpApiKey == null && sharedSessionService != null) {
+            mcpApiKey = generateMcpApiKey(sharedSessionService.ecf)
+        }
+        Map<String, String> sseHeaders = ['Accept': 'application/json, text/event-stream']
+        if (mcpApiKey) {
+            sseHeaders['api_key'] = mcpApiKey
+        } else {
+            sseHeaders['Authorization'] = 'Basic ' + 'SystemSupport:moqui'.bytes.encodeBase64().toString()
+        }
+        if (configId && configId != DEFAULT_CONFIG) sseHeaders['adk_config_id'] = configId
+        String mcpInternalPort = System.getenv('webapp_http_port') ?: '8080'
+        def sseParams = com.google.adk.tools.mcp.SseServerParameters.builder()
+                .url("http://localhost:${mcpInternalPort}/mcp/sse")
+                .headers(sseHeaders)
+                .build()
+        def prior = configMcpToolsets[configId]
+        if (prior != null) { try { prior.close() } catch (Exception ignore) {} }
+        def ts = new com.google.adk.tools.mcp.McpToolset(sseParams)
+        configMcpToolsets[configId] = ts
+        if (mcpToolset == null) mcpToolset = ts   // keep a default reference for legacy paths
+        return ts
+    }
+
+    /** Read an agent's toolMode (readOnly | scoped | full) from its persisted config.
+     *  Defaults to readOnly when unknown so new/unconfigured agents are safe by default. */
+    private static String lookupToolMode(String configId) {
+        if (!configId || configId == DEFAULT_CONFIG || sharedSessionService == null) return 'full'
+        try {
+            def ec = sharedSessionService.ecf.getExecutionContext()
+            boolean wasDisabled = ec.artifactExecution.disableAuthz()
+            try {
+                def cfg = ec.entity.find('moqui.adk.AdkAgentConfig')
+                        .condition('adkAgentConfigId', configId).one()
+                // null toolMode = legacy row (pre-governance) → keep full tool access.
+                return (cfg?.toolMode ?: 'full') as String
+            } finally {
+                if (!wasDisabled) ec.artifactExecution.enableAuthz()
+            }
+        } catch (Exception e) {
+            logger.warn("lookupToolMode failed for ${configId}: ${e.message}")
+            return 'readOnly'
+        }
+    }
+
     static void destroy() {
+        configMcpToolsets.values().each { ts ->
+            try { ts?.close() } catch (Exception e) { logger.warn("Error closing per-config McpToolset: ${e.message}") }
+        }
+        configMcpToolsets.clear()
         if (mcpToolset != null) {
             try {
                 logger.info('Closing ADK McpToolset...')

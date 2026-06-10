@@ -17,6 +17,17 @@
         <field name="scheduleEnabled"    type="text-indicator"/>
         <field name="schedulePrompt"     type="text-medium"/>
         <field name="scheduleChatRoomId" type="id"/>
+        <!-- Trust foundation: per-agent tool/service scoping + write governance -->
+        <!-- toolMode: readOnly | scoped | full  (default readOnly) -->
+        <field name="toolMode"         type="text-short"/>
+        <!-- serviceAllowlist: CSV/JSON of service-name globs allowed when toolMode=scoped -->
+        <field name="serviceAllowlist" type="text-long"/>
+        <!-- writePolicy: block | approve | allow  (default approve) -->
+        <field name="writePolicy"      type="text-short"/>
+        <!-- chat room where approval requests are posted -->
+        <field name="approvalChatRoomId" type="id"/>
+        <!-- party the agent acts as (audit attribution); default AGENT_<ownerPartyId> -->
+        <field name="agentPartyId"     type="id"/>
     </entity>
 
     <!-- Persistent ADK sessions (replaces in-memory InMemorySessionService) -->
@@ -35,6 +46,52 @@
         <field name="eventJson"         type="text-very-long"/>
         <field name="eventTime"         type="date-time"/>
         <index name="ADKSESEV_SID"><index-field name="adkSessionId"/></index>
+    </entity>
+
+    <!-- Audit trail of every agent tool/service action (read, write, blocked, approval).
+         ownerPartyId enforces tenant isolation: a company only ever sees its own rows. -->
+    <entity entity-name="AdkActionLog" package="moqui.adk" use="transactional">
+        <field name="adkActionLogId" type="id" is-pk="true"/>
+        <field name="ownerPartyId"   type="id"/>
+        <field name="configId"       type="id"/>
+        <field name="adkSessionId"   type="id"/>
+        <field name="agentPartyId"   type="id"/>
+        <field name="toolName"       type="text-short"/>
+        <field name="serviceName"    type="text-medium"/>
+        <field name="argsJson"       type="text-very-long"/>
+        <!-- verbClass: read | write -->
+        <field name="verbClass"      type="text-short"/>
+        <!-- decision: allowed | blocked | pending | approved | rejected -->
+        <field name="decision"       type="text-short"/>
+        <field name="reason"         type="text-medium"/>
+        <field name="resultSummary"  type="text-long"/>
+        <field name="tokensIn"       type="number-integer"/>
+        <field name="tokensOut"      type="number-integer"/>
+        <field name="tokensTotal"    type="number-integer"/>
+        <field name="actionTime"     type="date-time"/>
+        <index name="ADKACTLOG_OWNER"><index-field name="ownerPartyId"/></index>
+        <index name="ADKACTLOG_CFG"><index-field name="configId"/></index>
+        <index name="ADKACTLOG_SID"><index-field name="adkSessionId"/></index>
+    </entity>
+
+    <!-- Pending human-in-the-loop approvals for agent write actions.
+         ownerPartyId enforces tenant isolation on who may decide. -->
+    <entity entity-name="AdkApproval" package="moqui.adk" use="transactional">
+        <field name="adkApprovalId"    type="id" is-pk="true"/>
+        <field name="ownerPartyId"     type="id"/>
+        <field name="adkActionLogId"   type="id"/>
+        <field name="configId"         type="id"/>
+        <field name="serviceName"      type="text-medium"/>
+        <field name="argsJson"         type="text-very-long"/>
+        <!-- status: pending | approved | rejected | expired -->
+        <field name="status"           type="text-short"/>
+        <field name="requestedByUserId" type="id"/>
+        <field name="decidedByUserId"  type="id"/>
+        <field name="requestTime"      type="date-time"/>
+        <field name="decisionTime"     type="date-time"/>
+        <field name="expireTime"       type="date-time"/>
+        <index name="ADKAPPR_OWNER"><index-field name="ownerPartyId"/></index>
+        <index name="ADKAPPR_STATUS"><index-field name="status"/></index>
     </entity>
 
 </entities>

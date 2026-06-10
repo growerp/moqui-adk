@@ -27,6 +27,11 @@
                     scheduleEnabled   : cfg.scheduleEnabled == 'Y',
                     schedulePrompt    : cfg.schedulePrompt,
                     scheduleChatRoomId: cfg.scheduleChatRoomId,
+                    toolMode          : cfg.toolMode ?: 'readOnly',
+                    serviceAllowlist  : cfg.serviceAllowlist,
+                    writePolicy       : cfg.writePolicy ?: 'approve',
+                    approvalChatRoomId: cfg.approvalChatRoomId,
+                    agentPartyId      : cfg.agentPartyId,
                 ]"/>
                 <script>adkAgentConfigs.add(cfgOut)</script>
             </iterate>
@@ -45,6 +50,10 @@
             <parameter name="scheduleEnabled" type="Boolean" default="false"/>
             <parameter name="schedulePrompt"/>
             <parameter name="scheduleChatRoomId"/>
+            <parameter name="toolMode"/>
+            <parameter name="serviceAllowlist"/>
+            <parameter name="writePolicy"/>
+            <parameter name="approvalChatRoomId"/>
         </in-parameters>
         <out-parameters>
             <parameter name="adkAgentConfig" type="Map"/>
@@ -59,7 +68,9 @@
                           scheduleExpression: scheduleExpression,
                           scheduleEnabled: scheduleEnabled ? 'Y' : 'N',
                           schedulePrompt: schedulePrompt,
-                          scheduleChatRoomId: scheduleChatRoomId]"/>
+                          scheduleChatRoomId: scheduleChatRoomId,
+                          toolMode: toolMode, serviceAllowlist: serviceAllowlist,
+                          writePolicy: writePolicy, approvalChatRoomId: approvalChatRoomId]"/>
             <entity-find-one entity-name="moqui.adk.AdkAgentConfig" value-field="cfg"
                 auto-field-map="[adkAgentConfigId: adkAgentConfigId]"/>
             <set field="adkAgentConfig" from="[
@@ -74,6 +85,11 @@
                 scheduleEnabled   : cfg.scheduleEnabled == 'Y',
                 schedulePrompt    : cfg.schedulePrompt,
                 scheduleChatRoomId: cfg.scheduleChatRoomId,
+                toolMode          : cfg.toolMode ?: 'readOnly',
+                serviceAllowlist  : cfg.serviceAllowlist,
+                writePolicy       : cfg.writePolicy ?: 'approve',
+                approvalChatRoomId: cfg.approvalChatRoomId,
+                agentPartyId      : cfg.agentPartyId,
             ]"/>
         </actions>
     </service>
@@ -91,6 +107,10 @@
             <parameter name="scheduleEnabled" type="Boolean" default="false"/>
             <parameter name="schedulePrompt"/>
             <parameter name="scheduleChatRoomId"/>
+            <parameter name="toolMode"/>
+            <parameter name="serviceAllowlist"/>
+            <parameter name="writePolicy"/>
+            <parameter name="approvalChatRoomId"/>
         </in-parameters>
         <out-parameters>
             <parameter name="adkAgentConfig" type="Map"/>
@@ -110,7 +130,9 @@
                           scheduleExpression: scheduleExpression,
                           scheduleEnabled: scheduleEnabled ? 'Y' : 'N',
                           schedulePrompt: schedulePrompt,
-                          scheduleChatRoomId: scheduleChatRoomId]"/>
+                          scheduleChatRoomId: scheduleChatRoomId,
+                          toolMode: toolMode, serviceAllowlist: serviceAllowlist,
+                          writePolicy: writePolicy, approvalChatRoomId: approvalChatRoomId]"/>
             <entity-find-one entity-name="moqui.adk.AdkAgentConfig" value-field="cfg"
                 auto-field-map="[adkAgentConfigId: adkAgentConfigId]"/>
             <set field="adkAgentConfig" from="[
@@ -125,6 +147,11 @@
                 scheduleEnabled   : cfg.scheduleEnabled == 'Y',
                 schedulePrompt    : cfg.schedulePrompt,
                 scheduleChatRoomId: cfg.scheduleChatRoomId,
+                toolMode          : cfg.toolMode ?: 'readOnly',
+                serviceAllowlist  : cfg.serviceAllowlist,
+                writePolicy       : cfg.writePolicy ?: 'approve',
+                approvalChatRoomId: cfg.approvalChatRoomId,
+                agentPartyId      : cfg.agentPartyId,
             ]"/>
         </actions>
     </service>
@@ -289,6 +316,86 @@
             <if condition="uids">
                 <script>ec.makeNotificationMessage().topic('adkJobUpdate').userIds(uids)
                     .message([jobName: jobName, status: paused ? 'paused' : 'resumed']).send()</script>
+            </if>
+        </actions>
+    </service>
+
+    <!-- ── Agent action audit + approvals (tenant-scoped) ──────────────────────── -->
+
+    <!-- GET /adk/actions — recent agent action-log rows for the caller's company only -->
+    <service verb="get" noun="AdkAction">
+        <in-parameters>
+            <parameter name="configId"/>
+            <parameter name="limit" type="Integer" default="100"/>
+        </in-parameters>
+        <out-parameters><parameter name="adkActions" type="List"/></out-parameters>
+        <actions>
+            <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner" out-map="context"/>
+            <entity-find entity-name="moqui.adk.AdkActionLog" list="rows">
+                <econdition field-name="ownerPartyId" from="ownerPartyId" ignore-if-empty="true"/>
+                <econdition field-name="configId" from="configId" ignore-if-empty="true"/>
+                <order-by field-name="-actionTime"/>
+                <limit>${limit}</limit>
+            </entity-find>
+            <set field="adkActions" from="[]"/>
+            <iterate list="rows" entry="r">
+                <script>adkActions.add([
+                    adkActionLogId: r.adkActionLogId, configId: r.configId,
+                    agentPartyId: r.agentPartyId, toolName: r.toolName, serviceName: r.serviceName,
+                    argsJson: r.argsJson, verbClass: r.verbClass, decision: r.decision,
+                    reason: r.reason, resultSummary: r.resultSummary,
+                    tokensIn: r.tokensIn, tokensOut: r.tokensOut, tokensTotal: r.tokensTotal,
+                    actionTime: r.actionTime ])</script>
+            </iterate>
+        </actions>
+    </service>
+
+    <!-- GET /adk/approvals — pending (or all) approvals for the caller's company only -->
+    <service verb="get" noun="AdkApproval">
+        <in-parameters>
+            <parameter name="status" default-value="pending"/>
+        </in-parameters>
+        <out-parameters><parameter name="adkApprovals" type="List"/></out-parameters>
+        <actions>
+            <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner" out-map="context"/>
+            <entity-find entity-name="moqui.adk.AdkApproval" list="rows">
+                <econdition field-name="ownerPartyId" from="ownerPartyId" ignore-if-empty="true"/>
+                <econdition field-name="status" from="status" ignore-if-empty="true"/>
+                <order-by field-name="-requestTime"/>
+            </entity-find>
+            <set field="adkApprovals" from="[]"/>
+            <iterate list="rows" entry="r">
+                <script>adkApprovals.add([
+                    adkApprovalId: r.adkApprovalId, adkActionLogId: r.adkActionLogId,
+                    configId: r.configId, serviceName: r.serviceName, argsJson: r.argsJson,
+                    status: r.status, requestedByUserId: r.requestedByUserId,
+                    decidedByUserId: r.decidedByUserId, requestTime: r.requestTime,
+                    decisionTime: r.decisionTime ])</script>
+            </iterate>
+        </actions>
+    </service>
+
+    <!-- PUT /adk/approvals — approve or reject a pending approval (owner-checked) -->
+    <service verb="update" noun="AdkApproval">
+        <in-parameters>
+            <parameter name="adkApprovalId" required="true"/>
+            <parameter name="decision" required="true"/><!-- approved | rejected -->
+        </in-parameters>
+        <out-parameters>
+            <parameter name="status"/>
+            <parameter name="resultSummary"/>
+        </out-parameters>
+        <actions>
+            <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner" out-map="context"/>
+            <if condition="decision == 'approved'">
+                <service-call name="moqui.adk.AdkGovernanceServices.approve#AdkApproval" out-map="context"
+                    in-map="[adkApprovalId: adkApprovalId, callerOwnerPartyId: ownerPartyId,
+                             decidedByUserId: ec.user.userId]"/>
+                <else>
+                    <service-call name="moqui.adk.AdkGovernanceServices.reject#AdkApproval" out-map="context"
+                        in-map="[adkApprovalId: adkApprovalId, callerOwnerPartyId: ownerPartyId,
+                                 decidedByUserId: ec.user.userId]"/>
+                </else>
             </if>
         </actions>
     </service>

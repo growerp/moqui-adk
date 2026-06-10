@@ -18,6 +18,12 @@
             <parameter name="scheduleEnabled"    default-value="N"/>
             <parameter name="schedulePrompt"/>
             <parameter name="scheduleChatRoomId"/>
+            <!-- Trust foundation scoping -->
+            <parameter name="toolMode"/>
+            <parameter name="serviceAllowlist"/>
+            <parameter name="writePolicy"/>
+            <parameter name="approvalChatRoomId"/>
+            <parameter name="agentPartyId"/>
         </in-parameters>
         <out-parameters>
             <parameter name="adkAgentConfigId"/>
@@ -41,6 +47,11 @@
                 <set field="existing.scheduleEnabled"    from="scheduleEnabled"/>
                 <set field="existing.schedulePrompt"     from="schedulePrompt"/>
                 <set field="existing.scheduleChatRoomId" from="scheduleChatRoomId"/>
+                <if condition="toolMode != null"><set field="existing.toolMode" from="toolMode"/></if>
+                <if condition="serviceAllowlist != null"><set field="existing.serviceAllowlist" from="serviceAllowlist"/></if>
+                <if condition="writePolicy != null"><set field="existing.writePolicy" from="writePolicy"/></if>
+                <if condition="approvalChatRoomId != null"><set field="existing.approvalChatRoomId" from="approvalChatRoomId"/></if>
+                <if condition="agentPartyId != null"><set field="existing.agentPartyId" from="agentPartyId"/></if>
                 <entity-update value-field="existing"/>
                 <set field="adkAgentConfigId" from="existing.adkAgentConfigId"/>
                 <else>
@@ -57,6 +68,12 @@
                     <set field="newCfg.scheduleEnabled"    from="scheduleEnabled ?: 'N'"/>
                     <set field="newCfg.schedulePrompt"     from="schedulePrompt"/>
                     <set field="newCfg.scheduleChatRoomId" from="scheduleChatRoomId"/>
+                    <!-- Safe-by-default scoping: new agents are read-only, writes need approval -->
+                    <set field="newCfg.toolMode"           from="toolMode    ?: 'readOnly'"/>
+                    <set field="newCfg.serviceAllowlist"   from="serviceAllowlist"/>
+                    <set field="newCfg.writePolicy"        from="writePolicy ?: 'approve'"/>
+                    <set field="newCfg.approvalChatRoomId" from="approvalChatRoomId ?: scheduleChatRoomId"/>
+                    <set field="newCfg.agentPartyId"       from="agentPartyId"/>
                     <entity-sequenced-id-primary value-field="newCfg"/>
                     <entity-create value-field="newCfg"/>
                     <set field="adkAgentConfigId" from="newCfg.adkAgentConfigId"/>
