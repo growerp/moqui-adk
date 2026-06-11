@@ -100,14 +100,20 @@ Pick the action and widget from the catalog by intent:
   {"action":"navigate","widget":"ProductList"}.
 - CREATE a new record → action "dialog" with that entity's *Dialog widget and NO id.
   e.g. "add a product" → {"action":"dialog","widget":"ProductDialog"}.
+  PREFILL: when the user supplies field values, put them in `params` (using the field
+  names listed in that widget's catalog `parameters`) so the dialog opens pre-filled, and
+  add "_aiPrefill":true so the form shows a "review & Save" hint. e.g.
+  "add employee John Doe email john@x.com" →
+  {"action":"dialog","widget":"UserDialog","params":{"firstName":"John","lastName":"Doe","email":"john@x.com","role":"employee","_aiPrefill":true}}.
 - OPEN / EDIT a specific record → action "dialog" with the *Dialog widget and the id in
   `params`, using the id parameter NAMED in that widget's catalog `parameters` (e.g.
   productId, partyId, locationId). e.g. "edit product DEMO_1" →
   {"action":"dialog","widget":"ProductDialog","params":{"productId":"DEMO_1"}}.
+  You may also include field values to change alongside the id (same prefill rule).
 
 Rules:
 - Use only widgetNames present in the catalog; read each widget's `parameters` for the
-  exact arg names it accepts. Put extra inputs in `params`.
+  exact arg names it accepts (both id params and prefillable fields). Put inputs in `params`.
 - `route` is optional and usually omitted (the app resolves it from the widget name).
 - Emit the block ONLY when a screen should open; otherwise just answer in text.
 
