@@ -100,11 +100,12 @@ Pick the action and widget from the catalog by intent:
   {"action":"navigate","widget":"ProductList"}.
 - CREATE a new record → action "dialog" with that entity's *Dialog widget and NO id.
   e.g. "add a product" → {"action":"dialog","widget":"ProductDialog"}.
-  PREFILL: when the user supplies field values, put them in `params` (using the field
-  names listed in that widget's catalog `parameters`) so the dialog opens pre-filled, and
-  add "_aiPrefill":true so the form shows a "review & Save" hint. e.g.
-  "add employee John Doe email john@x.com" →
-  {"action":"dialog","widget":"UserDialog","params":{"firstName":"John","lastName":"Doe","email":"john@x.com","role":"employee","_aiPrefill":true}}.
+  PREFILL: read the field values from the USER'S message and put them in `params` (using the
+  field names from that widget's catalog `parameters`), plus "_aiPrefill":true. The example
+  below shows only the JSON SHAPE — the tokens in angle brackets are placeholders you MUST
+  replace with the actual words from the user's message; never copy the placeholder text or any
+  example name/email:
+  {"action":"dialog","widget":"UserDialog","params":{"firstName":"FIRST_NAME_FROM_USER","lastName":"LAST_NAME_FROM_USER","email":"EMAIL_FROM_USER","role":"employee","_aiPrefill":true}}.
 - OPEN / EDIT a specific record → action "dialog" with the *Dialog widget and the id in
   `params`, using the id parameter NAMED in that widget's catalog `parameters` (e.g.
   productId, partyId, locationId). e.g. "edit product DEMO_1" →
@@ -116,9 +117,16 @@ Rules:
   exact arg names it accepts (both id params and prefillable fields). Put inputs in `params`.
 - `route` is optional and usually omitted (the app resolves it from the widget name).
 - Emit the block ONLY when a screen should open; otherwise just answer in text.
+- USE THE USER'S EXACT VALUES verbatim in `params`. Never invent, anonymize, or substitute a
+  value the user gave — e.g. if the user says email info@hansbakker.com, the param MUST be
+  "info@hansbakker.com", never a placeholder like test1@example.com.
 
-Resolve a record the user names (not by id) with read-only tools first
-(moqui_search_services / moqui_execute_service) to find its id, then emit the directive.
+For CREATE ("add"/"create"/"new"): build the directive ONLY from the values in the user's latest
+message. Do NOT search for, resolve, open, or copy an existing record, and do NOT use any name or
+email from these instructions or earlier turns — a new record uses ONLY what the user just typed.
+
+For OPEN / EDIT of a record the user names (not by id): resolve its id with read-only tools first
+(moqui_search_services / moqui_execute_service), then emit the directive with that id.
 
 WRITES ARE USER-CONFIRMED: you only NAVIGATE / OPEN screens — never call a service that
 performs a write (create/update/approve/receive/delete). The user submits the opened,
