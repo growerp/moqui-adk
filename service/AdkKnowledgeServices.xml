@@ -321,4 +321,43 @@ ongoing tasks). Exclude one-off chit-chat and anything secret (keys, tokens). Ou
         </actions>
     </service>
 
+    <!-- Auto-ingest the tenant's product catalog as knowledge docs (one per product,
+         sourceType=product). Upserts by sourceId so re-running re-indexes in place
+         instead of duplicating. -->
+    <service verb="ingest" noun="ProductCatalog" authenticate="false" transaction-timeout="3600">
+        <in-parameters><parameter name="ownerPartyId" required="true"/></in-parameters>
+        <out-parameters><parameter name="productCount" type="Integer"/></out-parameters>
+        <actions>
+            <entity-find entity-name="mantle.product.Product" list="products">
+                <econdition field-name="ownerPartyId"/>
+                <order-by field-name="productName"/>
+                <limit>1000</limit>
+            </entity-find>
+            <set field="productCount" from="0"/>
+            <iterate list="products" entry="prod">
+                <set field="title" from="prod.productName ?: prod.pseudoId ?: prod.productId"/>
+                <set field="bodyText" from="'Product: ' + (prod.productName ?: '') + ' (ID: ' + (prod.pseudoId ?: prod.productId) + ')\n' + (prod.description ?: '')"/>
+                <entity-find entity-name="moqui.adk.AdkKnowledgeDoc" list="existing">
+                    <econdition field-name="ownerPartyId"/>
+                    <econdition field-name="sourceType" value="product"/>
+                    <econdition field-name="sourceId" from="prod.productId"/>
+                    <limit>1</limit>
+                </entity-find>
+                <if condition="existing">
+                    <set field="doc" from="existing[0]"/>
+                    <set field="doc.title" from="title"/>
+                    <entity-update value-field="doc"/>
+                    <service-call name="AdkKnowledgeServices.index#AdkKnowledgeChunks"
+                        in-map="[adkKnowledgeDocId: doc.adkKnowledgeDocId, ownerPartyId: ownerPartyId, text: bodyText]"/>
+                    <else>
+                        <service-call name="AdkKnowledgeServices.ingest#AdkKnowledge"
+                            in-map="[ownerPartyId: ownerPartyId, title: title, text: bodyText,
+                                     sourceType: 'product', sourceId: prod.productId]"/>
+                    </else>
+                </if>
+                <set field="productCount" from="productCount + 1"/>
+            </iterate>
+        </actions>
+    </service>
+
 </services>

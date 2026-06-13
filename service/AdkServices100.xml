@@ -484,6 +484,16 @@
         </actions>
     </service>
 
+    <!-- Auto-ingest the caller company's product catalog into the knowledge base. -->
+    <service verb="import" noun="AdkKnowledgeProducts">
+        <out-parameters><parameter name="productCount" type="Integer"/></out-parameters>
+        <actions>
+            <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner" out-map="context"/>
+            <service-call name="AdkKnowledgeServices.ingest#ProductCatalog" out-map="context"
+                in-map="[ownerPartyId: ownerPartyId]"/>
+        </actions>
+    </service>
+
     <service verb="delete" noun="AdkKnowledge">
         <in-parameters><parameter name="adkKnowledgeDocId" required="true"/></in-parameters>
         <actions>

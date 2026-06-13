@@ -52,6 +52,15 @@ class AdkManager {
     private static final Map<String, String>   tenantRegistry   = new ConcurrentHashMap<>()
     // sessionId → configId — in-memory cache rebuilt on demand from DB after restart
     private static final Map<String, String>   sessionOwn       = new ConcurrentHashMap<>()
+    // sessionId → completed-turn count, for throttling rolling-memory summarisation
+    private static final Map<String, Integer>  turnCounts       = new ConcurrentHashMap<>()
+    // Summarise a session into AdkMemory every N completed turns (env-tunable). The
+    // {memory} preamble of subsequent sessions is loaded from that summary (see
+    // AdkDevServlet.buildContext), giving continuity across conversations.
+    private static final int SUMMARIZE_EVERY_N_TURNS = {
+        try { return Math.max(1, Integer.parseInt(System.getenv('ADK_SUMMARIZE_EVERY') ?: '2')) }
+        catch (Exception ignore) { return 2 }
+    }()
     // configId → {provider, apiKey} for non-Google providers (future HTTP runners)
     private static final Map<String, Map>      providerRegistry = new ConcurrentHashMap<>()
 
@@ -534,11 +543,38 @@ CRITICAL tool-use rules — follow exactly:
         def runner = runnerForSession(sessionId)
         runner.sessionService().deleteSession(APP_NAME, userId, sessionId).blockingAwait()
         sessionOwn.remove(sessionId)
+        turnCounts.remove(sessionId)
     }
 
     // ── Agent execution ───────────────────────────────────────────────────────
 
     static RunConfig defaultRunConfig() { RunConfig.builder().setMaxLlmCalls(12).build() }
+
+    /**
+     * After a completed interactive turn, fold the session into the rolling per-(owner,user)
+     * AdkMemory every N turns. Runs async on a daemon thread (the summary needs an LLM call)
+     * so it never delays the chat response; failures are logged and swallowed.
+     */
+    static void maybeSummarize(String sessionId) {
+        if (!sessionId || sharedSessionService == null) return
+        int n = turnCounts.merge(sessionId, 1, { a, b -> a + b })
+        if (n % SUMMARIZE_EVERY_N_TURNS != 0) return
+        def ecf = sharedSessionService.ecf
+        Thread t = new Thread({
+            def ec = ecf.getExecutionContext()
+            try {
+                boolean wasDisabled = ec.artifactExecution.disableAuthz()
+                try {
+                    ec.service.sync().name('AdkKnowledgeServices.summarize#AdkSession')
+                            .parameters([adkSessionId: sessionId]).call()
+                } finally { if (!wasDisabled) ec.artifactExecution.enableAuthz() }
+            } catch (Exception e) {
+                logger.warn("maybeSummarize(${sessionId}) failed: ${e.message}")
+            } finally { ec.destroy() }
+        }, 'adk-summarize')
+        t.setDaemon(true)
+        t.start()
+    }
 
     static List<Map> runAgent(String userId, String sessionId, String text) {
         Content userContent = buildUserContent(text)
@@ -550,6 +586,7 @@ CRITICAL tool-use rules — follow exactly:
                 { Throwable t -> err[0] = t; logger.error("ADK runAgent error (session={}): {}", sessionId, t.message, t) }
             )
         if (err[0]) throw err[0]
+        maybeSummarize(sessionId)
         events
     }
 
@@ -604,7 +641,7 @@ CRITICAL tool-use rules — follow exactly:
             .subscribe(
                 { Event e -> eventCallback(eventToMap(e)) },
                 { Throwable t -> doneCallback(t) },
-                { doneCallback(null) }
+                { maybeSummarize(sessionId); doneCallback(null) }
             )
     }
 
@@ -742,6 +779,7 @@ CRITICAL tool-use rules — follow exactly:
         agentRegistry.clear()
         tenantRegistry.clear()
         sessionOwn.clear()
+        turnCounts.clear()
         providerRegistry.clear()
         sharedSessionService = null
         mcpApiKey = null
