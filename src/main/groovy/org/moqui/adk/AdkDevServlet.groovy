@@ -426,9 +426,9 @@ class AdkDevServlet extends HttpServlet {
                                         .condition('userId', ec.user.userId)
                                         .one()
                                     if (mem?.summaryText) {
-                                        ctx.memory = 'What you remember about this user/company from past '
-                                            + 'conversations (use it for continuity; do not repeat it verbatim):\n'
-                                            + mem.summaryText
+                                        ctx.memory = 'What you remember about this user/company from past ' +
+                                            'conversations (use it for continuity; do not repeat it verbatim):\n' +
+                                            mem.summaryText
                                     }
 
                                     // Main company = OrgInternal party for this owner
