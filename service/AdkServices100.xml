@@ -400,4 +400,86 @@
         </actions>
     </service>
 
+    <!-- ── Knowledge base (Phase 3 RAG), tenant-scoped ─────────────────────────── -->
+    <service verb="get" noun="AdkKnowledge">
+        <out-parameters><parameter name="adkKnowledgeDocs" type="List"/></out-parameters>
+        <actions>
+            <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner" out-map="context"/>
+            <entity-find entity-name="moqui.adk.AdkKnowledgeDoc" list="docs">
+                <econdition field-name="ownerPartyId" from="ownerPartyId" ignore-if-empty="true"/>
+                <order-by field-name="-createdDate"/>
+            </entity-find>
+            <set field="adkKnowledgeDocs" from="[]"/>
+            <iterate list="docs" entry="d">
+                <entity-find entity-name="moqui.adk.AdkKnowledgeChunk" list="chs">
+                    <econdition field-name="adkKnowledgeDocId" from="d.adkKnowledgeDocId"/>
+                </entity-find>
+                <script>adkKnowledgeDocs.add([
+                    adkKnowledgeDocId: d.adkKnowledgeDocId, title: d.title, sourceType: d.sourceType,
+                    mimeType: d.mimeType, chunkCount: chs.size(), createdDate: d.createdDate ])</script>
+            </iterate>
+        </actions>
+    </service>
+
+    <service verb="create" noun="AdkKnowledge">
+        <in-parameters>
+            <parameter name="title" required="true"/>
+            <parameter name="text" required="true"/>
+            <parameter name="sourceType" default-value="note"/>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="adkKnowledgeDocId"/>
+            <parameter name="chunkCount" type="Integer"/>
+        </out-parameters>
+        <actions>
+            <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner" out-map="context"/>
+            <service-call name="moqui.adk.AdkKnowledgeServices.ingest#AdkKnowledge" out-map="context"
+                in-map="[ownerPartyId: ownerPartyId, title: title, text: text, sourceType: sourceType,
+                         createdByUserId: ec.user.userId]"/>
+        </actions>
+    </service>
+
+    <service verb="delete" noun="AdkKnowledge">
+        <in-parameters><parameter name="adkKnowledgeDocId" required="true"/></in-parameters>
+        <actions>
+            <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner" out-map="context"/>
+            <entity-find-one entity-name="moqui.adk.AdkKnowledgeDoc" value-field="doc"
+                auto-field-map="[adkKnowledgeDocId: adkKnowledgeDocId]"/>
+            <if condition="doc &amp;&amp; doc.ownerPartyId == ownerPartyId">
+                <service-call name="moqui.adk.AdkKnowledgeServices.delete#AdkKnowledgeDoc"
+                    in-map="[adkKnowledgeDocId: adkKnowledgeDocId]"/>
+            </if>
+        </actions>
+    </service>
+
+    <!-- Memory: read the caller's rolling summary; PATCH triggers (re)summarisation
+         of the caller's most recent chat session. -->
+    <service verb="get" noun="AdkMemory">
+        <out-parameters><parameter name="summaryText"/><parameter name="lastUpdated" type="Timestamp"/></out-parameters>
+        <actions>
+            <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner" out-map="context"/>
+            <entity-find-one entity-name="moqui.adk.AdkMemory" value-field="mem">
+                <field-map field-name="ownerPartyId"/>
+                <field-map field-name="userId" from="ec.user.userId"/>
+            </entity-find-one>
+            <set field="summaryText" from="mem?.summaryText"/>
+            <set field="lastUpdated" from="mem?.lastUpdated"/>
+        </actions>
+    </service>
+
+    <service verb="update" noun="AdkMemory">
+        <out-parameters><parameter name="updated" type="Boolean"/></out-parameters>
+        <actions>
+            <entity-find entity-name="moqui.adk.AdkSession" list="sessions">
+                <econdition field-name="userId" from="ec.user.userId"/>
+                <order-by field-name="-lastUpdateTime"/>
+                <limit>1</limit>
+            </entity-find>
+            <if condition="sessions">
+                <service-call name="moqui.adk.AdkKnowledgeServices.summarize#AdkSession" out-map="context"
+                    in-map="[adkSessionId: sessions[0].adkSessionId]"/>
+            </if>
+        </actions>
+    </service>
+
 </services>

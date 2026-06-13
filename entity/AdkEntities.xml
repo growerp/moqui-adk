@@ -94,4 +94,47 @@
         <index name="ADKAPPR_STATUS"><index-field name="status"/></index>
     </entity>
 
+    <!-- ── Phase 3: Knowledge / RAG ──────────────────────────────────────────
+         Per-tenant knowledge base. Documents are chunked and embedded; the
+         searchKnowledge MCP tool retrieves the most similar chunks for an owner.
+         Tenant-isolated by ownerPartyId. -->
+    <entity entity-name="AdkKnowledgeDoc" package="moqui.adk" use="transactional">
+        <field name="adkKnowledgeDocId" type="id" is-pk="true"/>
+        <field name="ownerPartyId"      type="id"/>
+        <!-- sourceType: note | upload | product | policy | chat -->
+        <field name="sourceType"        type="text-short"/>
+        <field name="sourceId"          type="text-medium"/>
+        <field name="title"             type="text-medium"/>
+        <field name="mimeType"          type="text-short"/>
+        <field name="enabled"           type="text-indicator"/>
+        <field name="createdByUserId"   type="id"/>
+        <field name="createdDate"       type="date-time"/>
+        <index name="ADKKDOC_OWNER"><index-field name="ownerPartyId"/></index>
+    </entity>
+
+    <entity entity-name="AdkKnowledgeChunk" package="moqui.adk" use="transactional">
+        <field name="adkKnowledgeChunkId" type="id" is-pk="true"/>
+        <field name="ownerPartyId"        type="id"/>
+        <field name="adkKnowledgeDocId"   type="id"/>
+        <field name="seq"                 type="number-integer"/>
+        <field name="text"                type="text-very-long"/>
+        <!-- JSON array of floats; cosine computed in the search service -->
+        <field name="embeddingJson"       type="text-very-long"/>
+        <field name="embeddingModel"      type="text-short"/>
+        <field name="tokens"              type="number-integer"/>
+        <index name="ADKKCH_OWNER"><index-field name="ownerPartyId"/></index>
+        <index name="ADKKCH_DOC"><index-field name="adkKnowledgeDocId"/></index>
+    </entity>
+
+    <!-- Rolling per-(owner,user) memory summary, injected into the agent context. -->
+    <entity entity-name="AdkMemory" package="moqui.adk" use="transactional">
+        <field name="adkMemoryId"  type="id" is-pk="true"/>
+        <field name="ownerPartyId" type="id"/>
+        <field name="userId"       type="id"/>
+        <field name="summaryText"  type="text-very-long"/>
+        <field name="factsJson"    type="text-very-long"/>
+        <field name="lastUpdated"  type="date-time"/>
+        <index name="ADKMEM_OWNER_USER"><index-field name="ownerPartyId"/><index-field name="userId"/></index>
+    </entity>
+
 </entities>

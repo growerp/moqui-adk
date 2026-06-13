@@ -370,6 +370,8 @@ class AdkDevServlet extends HttpServlet {
             // Default for the {screenCatalog} instruction placeholder; the Flutter
             // client overrides this with the real catalog on session create.
             screenCatalog   : '[]',
+            // {memory} — rolling per-(owner,user) summary; filled below when present.
+            memory          : '',
         ]
         try {
             ExecutionContextFactory ecf = ecf(req)
@@ -417,6 +419,17 @@ class AdkDevServlet extends HttpServlet {
                                 String ownerPartyId = userParty?.ownerPartyId
                                 if (ownerPartyId) {
                                     ctx.tenantId = ownerPartyId
+
+                                    // Load rolling memory summary for this (owner,user) → {memory}.
+                                    def mem = ec.entity.find('moqui.adk.AdkMemory')
+                                        .condition('ownerPartyId', ownerPartyId)
+                                        .condition('userId', ec.user.userId)
+                                        .one()
+                                    if (mem?.summaryText) {
+                                        ctx.memory = 'What you remember about this user/company from past '
+                                            + 'conversations (use it for continuity; do not repeat it verbatim):\n'
+                                            + mem.summaryText
+                                    }
 
                                     // Main company = OrgInternal party for this owner
                                     def companyList = ec.entity.find('mantle.party.PartyDetailAndRole')
