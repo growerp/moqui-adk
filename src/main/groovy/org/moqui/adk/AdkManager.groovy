@@ -162,7 +162,9 @@ pre-filled dialog. Order/shipment specifics still work: "enter a sales order" �
         // Non-Google providers: store in side registry for future HTTP runner; skip Google ADK init
         if (effectiveProvider != 'gemini') {
             providerRegistry[configId] = [provider: effectiveProvider, apiKey: apiKey ?: '']
-            if (ownerPartyId) tenantRegistry[ownerPartyId] = configId
+            // Only a general (unnamed) interactive agent claims the tenant's chat route;
+            // named/scheduled agents (e.g. CI Monitor) must not hijack interactive chat.
+            if (ownerPartyId && !agentName) tenantRegistry[ownerPartyId] = configId
             logger.info("Non-Google provider '${effectiveProvider}' registered for configId='${configId}' (tenant='${ownerPartyId ?: 'global'}') — HTTP routing not yet implemented")
             return
         }
@@ -170,8 +172,9 @@ pre-filled dialog. Order/shipment specifics still work: "enter a sales order" �
         if (apiKey) System.setProperty('GOOGLE_API_KEY', apiKey)
 
         // Per-agent MCP toolset: identical to the shared one but tagged with this config's
-        // id so the MCP governance gate knows which agent (and tenant) is calling.
-        def agentMcpToolset = buildMcpToolset(configId)
+        // id (and owner) so the MCP governance gate / searchKnowledge can resolve the
+        // calling agent and its tenant.
+        def agentMcpToolset = buildMcpToolset(configId, ownerPartyId)
 
         String envModel = System.getenv('GEMINI_MODEL') ?: System.getProperty('GEMINI_MODEL') ?: 'gemini-2.5-flash'
         String modelId = modelName ?: envModel
@@ -251,7 +254,9 @@ CRITICAL tool-use rules — follow exactly:
 
         registry[configId]      = runner
         agentRegistry[configId] = agent
-        if (ownerPartyId) tenantRegistry[ownerPartyId] = configId
+        // Only a general (unnamed) interactive agent claims the tenant's chat route;
+        // named/scheduled agents (e.g. CI Monitor) must not hijack interactive chat.
+        if (ownerPartyId && !agentName) tenantRegistry[ownerPartyId] = configId
         currentConfig = [agentName: agent.name(), modelName: modelName, configId: configId]
         logger.info("ADK agent '${agent.name()}' registered as configId='${configId}' (tenant='${ownerPartyId ?: 'global'}')")
     }
@@ -394,6 +399,71 @@ CRITICAL tool-use rules — follow exactly:
         initConfig(DEFAULT_CONFIG, null, null, model, '', defaultKey)
     }
 
+    /// Ensure a general per-tenant interactive runner exists for [ownerPartyId] and owns
+    /// the tenant's chat route. Built once per owner (configId 'INTERACTIVE_<owner>'); its
+    /// McpToolset carries the owner so searchKnowledge can resolve the tenant. No-op when
+    /// already registered. Falls back to the global default if no key can be found.
+    static synchronized void ensureInteractiveForTenant(String ownerPartyId) {
+        if (!ownerPartyId || sharedSessionService == null) return
+        String cid = 'INTERACTIVE_' + ownerPartyId
+        if (registry.containsKey(cid)) return
+        String key = resolveTenantKey(ownerPartyId)
+        if (!key) {
+            logger.warn("ensureInteractiveForTenant: no gemini key for owner=${ownerPartyId}; " +
+                    "interactive chat will use the global default (no tenant knowledge access)")
+            return
+        }
+        // agentName=null → builds the general 'growerp-agent'; ownerPartyId set + unnamed →
+        // claims tenantRegistry[owner] and its McpToolset carries adk_owner_party_id.
+        initConfig(cid, ownerPartyId, null, 'gemini-2.5-flash', '', key)
+        logger.info("Registered per-tenant interactive agent configId='${cid}' (owner=${ownerPartyId})")
+    }
+
+    /// Resolve a gemini API key for [ownerPartyId]: env vars → this owner's LlmConfig →
+    /// any gemini LlmConfig. Returns '' when none found.
+    private static String resolveTenantKey(String ownerPartyId) {
+        String key = System.getenv('GOOGLE_API_KEY') ?:
+                     System.getenv('GOOGLE_GENAI_API_KEY') ?:
+                     System.getenv('GEMINI_API_KEY') ?: ''
+        if (key) return key
+        try {
+            def ec = sharedSessionService.ecf.getExecutionContext()
+            boolean wasDisabled = ec.artifactExecution.disableAuthz()
+            try {
+                def lc = ec.entity.find('growerp.general.LlmConfig')
+                        .condition('ownerPartyId', ownerPartyId)
+                        .condition('llmProvider', 'gemini').one()
+                key = lc?.getString('apiKey') ?: ''
+                if (!key) {
+                    for (def row in ec.entity.find('growerp.general.LlmConfig')
+                            .condition('llmProvider', 'gemini').list()) {
+                        String k = row.getString('apiKey')
+                        if (k) { key = k; break }
+                    }
+                }
+                // Fall back to a key stored directly on an AdkAgentConfig (this owner first,
+                // then any gemini agent) — mirrors lazyInit's key-borrowing so the interactive
+                // agent works even when only a scheduled agent (e.g. CI Monitor) holds the key.
+                if (!key) {
+                    def ac = ec.entity.find('moqui.adk.AdkAgentConfig')
+                            .condition('ownerPartyId', ownerPartyId)
+                            .condition('llmProvider', 'gemini').list()
+                    for (def row in ac) { String k = row.getString('apiKey'); if (k) { key = k; break } }
+                }
+                if (!key) {
+                    for (def row in ec.entity.find('moqui.adk.AdkAgentConfig')
+                            .condition('llmProvider', 'gemini').list()) {
+                        String k = row.getString('apiKey')
+                        if (k) { key = k; break }
+                    }
+                }
+            } finally { if (!wasDisabled) ec.artifactExecution.enableAuthz() }
+        } catch (Exception e) {
+            logger.warn("resolveTenantKey(${ownerPartyId}) failed: ${e.message}")
+        }
+        return key
+    }
+
     /// Drop the shared interactive/default runner and re-create it so a key change
     /// (e.g. saved in System Setup) takes effect on the next chat without a restart.
     /// Scheduled/specialised agent runners and the MCP toolset are left intact.
@@ -414,6 +484,9 @@ CRITICAL tool-use rules — follow exactly:
 
     static Map createSession(String userId, Map<String, Object> initialState = [:]) {
         String tenantId = initialState?.get('tenantId') as String
+        // Interactive chat must run as a general per-tenant agent (NOT a scheduled/named
+        // agent like the CI Monitor) so it carries the tenant owner for searchKnowledge.
+        if (tenantId && tenantId != 'DEFAULT') ensureInteractiveForTenant(tenantId)
         String configId = resolveConfigId(tenantId)
         Runner runner   = registry[configId] ?: registry.values().first()
         if (!runner) throw new IllegalStateException('ADK not initialized — add API key in ADK → Configuration')
@@ -600,9 +673,10 @@ CRITICAL tool-use rules — follow exactly:
         m
     }
 
-    /** Build a per-agent MCP toolset whose SSE headers carry `adk_config_id` so the
-     *  governance gate on the MCP server can resolve the calling agent and its tenant. */
-    private static com.google.adk.tools.mcp.McpToolset buildMcpToolset(String configId) {
+    /** Build a per-agent MCP toolset whose SSE headers carry `adk_config_id` (and the
+     *  tenant `adk_owner_party_id`) so the governance gate / searchKnowledge on the MCP
+     *  server can resolve the calling agent and its tenant. */
+    private static com.google.adk.tools.mcp.McpToolset buildMcpToolset(String configId, String ownerPartyId = null) {
         if (mcpApiKey == null && sharedSessionService != null) {
             mcpApiKey = generateMcpApiKey(sharedSessionService.ecf)
         }
@@ -613,6 +687,9 @@ CRITICAL tool-use rules — follow exactly:
             sseHeaders['Authorization'] = 'Basic ' + 'SystemSupport:moqui'.bytes.encodeBase64().toString()
         }
         if (configId && configId != DEFAULT_CONFIG) sseHeaders['adk_config_id'] = configId
+        // Tenant owner — lets searchKnowledge resolve the company even for the general
+        // per-tenant interactive agent (whose configId is not an AdkAgentConfig row).
+        if (ownerPartyId) sseHeaders['adk_owner_party_id'] = ownerPartyId
         String mcpInternalPort = System.getenv('webapp_http_port') ?: '8080'
         def sseParams = com.google.adk.tools.mcp.SseServerParameters.builder()
                 .url("http://localhost:${mcpInternalPort}/mcp/sse")
