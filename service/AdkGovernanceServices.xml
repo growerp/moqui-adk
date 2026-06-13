@@ -125,7 +125,7 @@
                     <set field="cardText" from="'🔔 Approval needed — agent &quot;' + (cfg.agentName ?: 'Agent') +
                         '&quot; wants to run ' + serviceName + '\n' + argsJson +
                         '\nApprove/Reject in ADK → Approvals (id ' + apprOut.adkApprovalId + ').'"/>
-                    <service-call name="moqui.adk.AdkGovernanceServices.post#AgentChatMessage"
+                    <service-call name="AdkGovernanceServices.post#AgentChatMessage"
                         in-map="[chatRoomId: cfg.approvalChatRoomId, ownerPartyId: ownerPartyId,
                                  agentName: cfg.agentName, content: cardText]"/>
                 </if>
@@ -197,7 +197,7 @@
             <set field="appr.decisionTime" from="ec.user.nowTimestamp"/>
             <entity-update value-field="appr"/>
             <if condition="appr.adkActionLogId">
-                <service-call name="moqui.adk.AdkGovernanceServices.record#AgentResult"
+                <service-call name="AdkGovernanceServices.record#AgentResult"
                     in-map="[adkActionLogId: appr.adkActionLogId, resultSummary: resultSummary]"/>
                 <entity-find-one entity-name="moqui.adk.AdkActionLog" value-field="lg" for-update="true"
                     auto-field-map="[adkActionLogId: appr.adkActionLogId]"/>

@@ -388,11 +388,11 @@
         <actions>
             <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner" out-map="context"/>
             <if condition="decision == 'approved'">
-                <service-call name="moqui.adk.AdkGovernanceServices.approve#AdkApproval" out-map="context"
+                <service-call name="AdkGovernanceServices.approve#AdkApproval" out-map="context"
                     in-map="[adkApprovalId: adkApprovalId, callerOwnerPartyId: ownerPartyId,
                              decidedByUserId: ec.user.userId]"/>
                 <else>
-                    <service-call name="moqui.adk.AdkGovernanceServices.reject#AdkApproval" out-map="context"
+                    <service-call name="AdkGovernanceServices.reject#AdkApproval" out-map="context"
                         in-map="[adkApprovalId: adkApprovalId, callerOwnerPartyId: ownerPartyId,
                                  decidedByUserId: ec.user.userId]"/>
                 </else>
@@ -402,11 +402,14 @@
 
     <!-- ── Knowledge base (Phase 3 RAG), tenant-scoped ─────────────────────────── -->
     <service verb="get" noun="AdkKnowledge">
+        <in-parameters><parameter name="search"/></in-parameters>
         <out-parameters><parameter name="adkKnowledgeDocs" type="List"/></out-parameters>
         <actions>
             <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner" out-map="context"/>
             <entity-find entity-name="moqui.adk.AdkKnowledgeDoc" list="docs">
                 <econdition field-name="ownerPartyId" from="ownerPartyId" ignore-if-empty="true"/>
+                <econdition field-name="title" operator="like" ignore-case="true"
+                    from="search ? ('%' + search + '%') : null" ignore-if-empty="true"/>
                 <order-by field-name="-createdDate"/>
             </entity-find>
             <set field="adkKnowledgeDocs" from="[]"/>
@@ -418,6 +421,33 @@
                     adkKnowledgeDocId: d.adkKnowledgeDocId, title: d.title, sourceType: d.sourceType,
                     mimeType: d.mimeType, chunkCount: chs.size(), createdDate: d.createdDate ])</script>
             </iterate>
+        </actions>
+    </service>
+
+    <service verb="get" noun="AdkKnowledgeDetail">
+        <in-parameters><parameter name="adkKnowledgeDocId" required="true"/></in-parameters>
+        <out-parameters>
+            <parameter name="adkKnowledgeDocId"/>
+            <parameter name="title"/>
+            <parameter name="sourceType"/>
+            <parameter name="content"/>
+        </out-parameters>
+        <actions>
+            <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner" out-map="context"/>
+            <entity-find-one entity-name="moqui.adk.AdkKnowledgeDoc" value-field="doc"
+                auto-field-map="[adkKnowledgeDocId: adkKnowledgeDocId]"/>
+            <if condition="!doc || doc.ownerPartyId != ownerPartyId"><return/></if>
+            <set field="title" from="doc.title"/>
+            <set field="sourceType" from="doc.sourceType"/>
+            <entity-find entity-name="moqui.adk.AdkKnowledgeChunk" list="chs">
+                <econdition field-name="adkKnowledgeDocId"/>
+                <order-by field-name="seq"/>
+            </entity-find>
+            <script>
+                def sb = new StringBuilder()
+                chs.each { ch -> sb.append(ch.text ?: '').append('\n') }
+                content = sb.toString().trim()
+            </script>
         </actions>
     </service>
 
@@ -433,9 +463,24 @@
         </out-parameters>
         <actions>
             <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner" out-map="context"/>
-            <service-call name="moqui.adk.AdkKnowledgeServices.ingest#AdkKnowledge" out-map="context"
+            <service-call name="AdkKnowledgeServices.ingest#AdkKnowledge" out-map="context"
                 in-map="[ownerPartyId: ownerPartyId, title: title, text: text, sourceType: sourceType,
                          createdByUserId: ec.user.userId]"/>
+        </actions>
+    </service>
+
+    <service verb="update" noun="AdkKnowledge">
+        <in-parameters>
+            <parameter name="adkKnowledgeDocId" required="true"/>
+            <parameter name="title"/>
+            <parameter name="text"/>
+        </in-parameters>
+        <out-parameters><parameter name="chunkCount" type="Integer"/></out-parameters>
+        <actions>
+            <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner" out-map="context"/>
+            <service-call name="AdkKnowledgeServices.update#AdkKnowledge" out-map="context"
+                in-map="[adkKnowledgeDocId: adkKnowledgeDocId, ownerPartyId: ownerPartyId,
+                         title: title, text: text]"/>
         </actions>
     </service>
 
@@ -446,7 +491,7 @@
             <entity-find-one entity-name="moqui.adk.AdkKnowledgeDoc" value-field="doc"
                 auto-field-map="[adkKnowledgeDocId: adkKnowledgeDocId]"/>
             <if condition="doc &amp;&amp; doc.ownerPartyId == ownerPartyId">
-                <service-call name="moqui.adk.AdkKnowledgeServices.delete#AdkKnowledgeDoc"
+                <service-call name="AdkKnowledgeServices.delete#AdkKnowledgeDoc"
                     in-map="[adkKnowledgeDocId: adkKnowledgeDocId]"/>
             </if>
         </actions>
@@ -476,7 +521,7 @@
                 <limit>1</limit>
             </entity-find>
             <if condition="sessions">
-                <service-call name="moqui.adk.AdkKnowledgeServices.summarize#AdkSession" out-map="context"
+                <service-call name="AdkKnowledgeServices.summarize#AdkSession" out-map="context"
                     in-map="[adkSessionId: sessions[0].adkSessionId]"/>
             </if>
         </actions>

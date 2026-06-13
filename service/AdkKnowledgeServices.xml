@@ -32,11 +32,13 @@
         </out-parameters>
         <actions>
             <if condition="!apiKey">
-                <service-call name="moqui.adk.AdkKnowledgeServices.get#TenantLlmKey"
+                <service-call name="AdkKnowledgeServices.get#TenantLlmKey"
                     in-map="[ownerPartyId: ownerPartyId]" out-map="context"/>
             </if>
             <if condition="!apiKey"><return error="true" message="No Gemini API key configured for this company."/></if>
-            <set field="model" value="text-embedding-004"/>
+            <!-- Embedding model (overridable via env). gemini-embedding-001 is the current
+                 GA model; older text-embedding-004 is rejected by some keys/API versions. -->
+            <set field="model" from="System.getenv('GEMINI_EMBED_MODEL') ?: System.getProperty('GEMINI_EMBED_MODEL') ?: 'gemini-embedding-001'"/>
             <script><![CDATA[
                 import groovy.json.JsonOutput
                 import groovy.json.JsonSlurper
@@ -82,7 +84,26 @@
                          title: title, mimeType: mimeType, enabled: 'Y',
                          createdByUserId: createdByUserId ?: ec.user.userId,
                          createdDate: ec.user.nowTimestamp]"/>
-            <!-- Split into ~2000-char chunks with ~200-char overlap (sentence-friendly). -->
+            <service-call name="AdkKnowledgeServices.index#AdkKnowledgeChunks" out-map="context"
+                in-map="[adkKnowledgeDocId: adkKnowledgeDocId, ownerPartyId: ownerPartyId, text: text]"/>
+        </actions>
+    </service>
+
+    <!-- (Re)build the chunk+embedding set for a doc: drop existing chunks, then
+         chunk the text (~2000 chars, ~200 overlap) and embed each. Shared by
+         ingest and update. -->
+    <service verb="index" noun="AdkKnowledgeChunks" authenticate="false" transaction-timeout="600">
+        <in-parameters>
+            <parameter name="adkKnowledgeDocId" required="true"/>
+            <parameter name="ownerPartyId" required="true"/>
+            <parameter name="text" required="true"/>
+        </in-parameters>
+        <out-parameters><parameter name="chunkCount" type="Integer"/></out-parameters>
+        <actions>
+            <entity-find entity-name="moqui.adk.AdkKnowledgeChunk" list="oldChunks">
+                <econdition field-name="adkKnowledgeDocId"/>
+            </entity-find>
+            <iterate list="oldChunks" entry="oc"><entity-delete value-field="oc"/></iterate>
             <script><![CDATA[
                 String t = (text as String).trim()
                 int size = 2000, overlap = 200
@@ -92,7 +113,6 @@
                     int i = 0
                     while (i < t.length()) {
                         int end = Math.min(i + size, t.length())
-                        // try to break on a whitespace near the end
                         if (end < t.length()) {
                             int ws = t.lastIndexOf(' ', end)
                             if (ws > i + (size/2 as int)) end = ws
@@ -107,7 +127,7 @@
             ]]></script>
             <set field="seq" from="0"/>
             <iterate list="chunks" entry="chunkText">
-                <service-call name="moqui.adk.AdkKnowledgeServices.embed#Text"
+                <service-call name="AdkKnowledgeServices.embed#Text"
                     in-map="[text: chunkText, ownerPartyId: ownerPartyId]" out-map="embedOut"/>
                 <set field="embJson" from="groovy.json.JsonOutput.toJson(embedOut.embedding)"/>
                 <service-call name="create#moqui.adk.AdkKnowledgeChunk"
@@ -117,6 +137,31 @@
                 <set field="seq" from="seq + 1"/>
             </iterate>
             <set field="chunkCount" from="seq"/>
+        </actions>
+    </service>
+
+    <!-- Update a doc's title and/or text (re-chunks + re-embeds on text change). -->
+    <service verb="update" noun="AdkKnowledge" authenticate="false" transaction-timeout="600">
+        <in-parameters>
+            <parameter name="adkKnowledgeDocId" required="true"/>
+            <parameter name="ownerPartyId" required="true"/>
+            <parameter name="title"/>
+            <parameter name="text"/>
+        </in-parameters>
+        <out-parameters><parameter name="chunkCount" type="Integer"/></out-parameters>
+        <actions>
+            <entity-find-one entity-name="moqui.adk.AdkKnowledgeDoc" value-field="doc"/>
+            <if condition="!doc || doc.ownerPartyId != ownerPartyId">
+                <return error="true" message="Knowledge document not found"/>
+            </if>
+            <if condition="title != null">
+                <set field="doc.title" from="title"/>
+                <entity-update value-field="doc"/>
+            </if>
+            <if condition="text != null">
+                <service-call name="AdkKnowledgeServices.index#AdkKnowledgeChunks" out-map="context"
+                    in-map="[adkKnowledgeDocId: adkKnowledgeDocId, ownerPartyId: ownerPartyId, text: text]"/>
+            </if>
         </actions>
     </service>
 
@@ -131,7 +176,7 @@
             <parameter name="results" type="List"/>
         </out-parameters>
         <actions>
-            <service-call name="moqui.adk.AdkKnowledgeServices.embed#Text"
+            <service-call name="AdkKnowledgeServices.embed#Text"
                 in-map="[text: query, ownerPartyId: ownerPartyId]" out-map="qEmbed"/>
             <entity-find entity-name="moqui.adk.AdkKnowledgeChunk" list="chunkList">
                 <econdition field-name="ownerPartyId"/>
@@ -194,7 +239,7 @@
         <out-parameters><parameter name="text"/></out-parameters>
         <actions>
             <if condition="!apiKey">
-                <service-call name="moqui.adk.AdkKnowledgeServices.get#TenantLlmKey"
+                <service-call name="AdkKnowledgeServices.get#TenantLlmKey"
                     in-map="[ownerPartyId: ownerPartyId]" out-map="context"/>
             </if>
             <if condition="!apiKey"><return error="true" message="No Gemini API key configured."/></if>
@@ -258,7 +303,7 @@ Update the memory: output 4-8 short bullet points capturing durable facts and pr
 remembering for future conversations (names, roles, recurring requests, stated preferences,
 ongoing tasks). Exclude one-off chit-chat and anything secret (keys, tokens). Output only the bullets."""
             ]]></script>
-            <service-call name="moqui.adk.AdkKnowledgeServices.generate#Text"
+            <service-call name="AdkKnowledgeServices.generate#Text"
                 in-map="[prompt: prompt, ownerPartyId: ownerPartyId]" out-map="genOut"/>
             <if condition="!genOut.text"><return/></if>
             <if condition="mem">
