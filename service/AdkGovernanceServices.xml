@@ -46,13 +46,27 @@
                 // everything else (create/update/delete/store/send/...) is a write.
                 def READ_VERBS = ['get','find','search','view','list','check','calculate',
                                   'validate','count','export'] as Set
-                def verb = sd?.verb ?: ''
+                // Implicit entity-auto CRUD (create#/get#/update#/delete#<Entity>) has NO
+                // ServiceDefinition, so fall back to the verb prefix of the service name —
+                // otherwise every entity-auto call is misclassified as a write.
+                def verb = sd?.verb ?: (serviceName?.contains('#') ? serviceName.substring(0, serviceName.indexOf('#')) : '')
                 verbClass = READ_VERBS.contains(verb) ? 'read' : 'write'
 
                 def pinned = new LinkedHashMap(parameters ?: [:])
                 ownerPartyId = cfg?.ownerPartyId
                 agentPartyId = cfg?.agentPartyId
-                def acceptsOwner = sd?.getInParameterNames()?.contains('ownerPartyId')
+                // Does the target accept an ownerPartyId? Defined services: read the in-params.
+                // Entity-auto CRUD: inspect the entity's fields so tenant-pinning still applies.
+                def acceptsOwner = false
+                if (sd != null) {
+                    acceptsOwner = sd.getInParameterNames()?.contains('ownerPartyId') ?: false
+                } else if (serviceName?.contains('#')) {
+                    try {
+                        String entName = serviceName.substring(serviceName.indexOf('#') + 1)
+                        def ed = ec.entity.getEntityDefinition(entName)
+                        acceptsOwner = ed?.getAllFieldNames()?.contains('ownerPartyId') ?: false
+                    } catch (ignored) { }
+                }
                 tenantViolation = false
                 if (ownerPartyId && acceptsOwner) {
                     if (pinned.ownerPartyId && (pinned.ownerPartyId as String) != (ownerPartyId as String))
