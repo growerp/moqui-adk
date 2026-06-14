@@ -11,7 +11,7 @@
         <field name="apiKey"      type="text-medium"/>
         <field name="llmProvider" type="text-short"/>
         <field name="instruction" type="text-long"/>
-        <field name="description" type="text-short"/>
+        <field name="description" type="text-medium"/>
         <field name="enabled"          type="text-indicator"/>
         <field name="scheduleExpression" type="text-short"/>
         <field name="scheduleEnabled"    type="text-indicator"/>
