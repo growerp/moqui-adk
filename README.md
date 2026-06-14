@@ -17,6 +17,8 @@ A native Moqui component that integrates the [Google ADK Java SDK](https://githu
 - **Moqui MCP tools** — every agent is wired to the [moqui-mcp](../moqui-mcp) Model Context Protocol tools, so agents can search and execute Moqui services (and browse screens) to answer real ERP questions
 - **Default `growerp-agent`** — used when no custom agent is configured: a GrowERP/Moqui assistant with the Moqui MCP tools plus a `getCurrentTime` example tool
 - **Moqui dashboard** — status overview and configuration screen at `/vapps/adk/`
+- **Knowledge Base (RAG) & Memory** — per-tenant document ingestion, embeddings, and rolling cross-session memory summaries
+- **UI Prefilling** — agent can prefill create/edit dialogs directly in the frontend UI
 - No extra processes, no Python, no extra ports — everything runs inside Moqui
 
 ---
@@ -352,6 +354,27 @@ ADK Java 1.3.0 ships only `InMemorySessionService` and `VertexAiSessionService`.
 | `GET` | `/adk/configs` | List agent configs for the authenticated tenant |
 | `POST` | `/adk/configs` | Create or update an agent config (upsert by agentName) |
 | `DELETE` | `/adk/configs/{configId}` | Delete an agent config |
+| `GET`/`POST`| `/adk/knowledge` | Manage knowledge documents and product catalogs |
+| `GET`/`POST`| `/adk/memory` | Get or trigger memory summaries |
+
+---
+
+## Knowledge Base & Memory (RAG)
+
+The ADK includes a full Retrieval-Augmented Generation (RAG) and long-term memory system:
+
+### Knowledge Base
+- **Ingestion**: Upload documents or ingest product catalogs via the REST API (`/adk/knowledge`). 
+- **Embeddings**: Documents are automatically chunked and embedded using `gemini-embedding-001` (configurable).
+- **Search**: The agent's MCP tools include `searchKnowledge` to retrieve relevant chunks via in-database cosine similarity search (no external vector database required).
+- **Tenant Isolation**: All knowledge is strictly scoped to the specific `ownerPartyId`.
+
+### Memory
+- **Rolling Summaries**: Every few turns, the system asynchronously summarizes the conversation.
+- **Cross-session Recall**: These summaries are stored as `AdkMemory` and injected into the agent's system prompt on subsequent sessions, allowing the agent to remember user preferences and past context.
+
+### UI Prefilling
+When users request to create or edit records, the agent can intelligently emit directives to prefill the frontend UI dialogs (using `_aiPrefill: true`), keeping the user in control of final confirmation and saving.
 
 ---
 
@@ -408,6 +431,9 @@ Each tenant's users will be routed to their own `Runner` + `LlmAgent` instance. 
 | `moqui.adk.AdkAgentConfig` | Agent config: ownerPartyId, name, model, API key, instruction, enabled flag, schedule fields (`scheduleExpression`, `scheduleEnabled`, `schedulePrompt`, `scheduleChatRoomId`) |
 | `moqui.adk.AdkSession` | Persistent session: userId, configId, state JSON, timestamps |
 | `moqui.adk.AdkSessionEvent` | Individual event/message JSON for a session (ordered by eventTime) |
+| `moqui.adk.AdkKnowledgeDoc` | Document metadata for the Knowledge Base |
+| `moqui.adk.AdkKnowledgeChunk` | Text chunks with vector embeddings (`embeddingJson`) for cosine search |
+| `moqui.adk.AdkMemory` | Per-user/tenant rolling memory summaries for cross-session recall |
 
 Session state and full conversation history are stored in the database and survive Moqui restarts.
 
