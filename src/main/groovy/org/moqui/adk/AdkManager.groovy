@@ -54,6 +54,8 @@ class AdkManager {
     private static final Map<String, String>   sessionOwn       = new ConcurrentHashMap<>()
     // sessionId → completed-turn count, for throttling rolling-memory summarisation
     private static final Map<String, Integer>  turnCounts       = new ConcurrentHashMap<>()
+    // configIds currently mid-build — breaks team-membership cycles during coordinator assembly
+    private static final Set<String>           buildingConfigs  = ConcurrentHashMap.newKeySet()
     // Summarise a session into AdkMemory every N completed turns (env-tunable). The
     // {memory} preamble of subsequent sessions is loaded from that summary (see
     // AdkDevServlet.buildContext), giving continuity across conversations.
@@ -255,6 +257,16 @@ CRITICAL tool-use rules — follow exactly:
                     .build()
         }
 
+        // Phase 4: a coordinator/workflow config replaces its base agent with an orchestrator
+        // that delegates to its team members (router via AgentTool — each member keeps its own
+        // McpToolset, so its scope/writePolicy/owner-pin still apply when the coordinator calls it).
+        def orch = lookupOrchestration(configId)
+        boolean isCoordinator = orch != null && (orch.role == 'coordinator' || orch.role == 'workflow')
+        if (isCoordinator) {
+            def orchestrated = buildOrchestrator(configId, ownerPartyId, agentName, modelArg, orch)
+            if (orchestrated != null) agent = orchestrated
+        }
+
         Runner runner = Runner.builder()
                 .agent(agent)
                 .appName(APP_NAME)
@@ -263,9 +275,9 @@ CRITICAL tool-use rules — follow exactly:
 
         registry[configId]      = runner
         agentRegistry[configId] = agent
-        // Only a general (unnamed) interactive agent claims the tenant's chat route;
-        // named/scheduled agents (e.g. CI Monitor) must not hijack interactive chat.
-        if (ownerPartyId && !agentName) tenantRegistry[ownerPartyId] = configId
+        // A general (unnamed) interactive agent OR a coordinator claims the tenant's chat route;
+        // plain named/scheduled specialists (e.g. CI Monitor) must not hijack interactive chat.
+        if (ownerPartyId && (!agentName || isCoordinator)) tenantRegistry[ownerPartyId] = configId
         currentConfig = [agentName: agent.name(), modelName: modelName, configId: configId]
         logger.info("ADK agent '${agent.name()}' registered as configId='${configId}' (tenant='${ownerPartyId ?: 'global'}')")
     }
@@ -416,6 +428,9 @@ CRITICAL tool-use rules — follow exactly:
         if (!ownerPartyId || sharedSessionService == null) return
         String cid = 'INTERACTIVE_' + ownerPartyId
         if (registry.containsKey(cid)) return
+        // A coordinator (or already-built interactive agent) may already own this tenant's chat
+        // route — don't shadow it with the generic interactive default.
+        if (tenantRegistry.containsKey(ownerPartyId)) return
         String key = resolveTenantKey(ownerPartyId)
         if (!key) {
             logger.warn("ensureInteractiveForTenant: no gemini key for owner=${ownerPartyId}; " +
@@ -481,6 +496,15 @@ CRITICAL tool-use rules — follow exactly:
         agentRegistry.remove(DEFAULT_CONFIG)
         currentConfig = [:]
         ensureInteractiveDefault(ecf)
+    }
+
+    /// Rebuild a single named config (e.g. a coordinator after its team changed) so the
+    /// running registry reflects the latest DB state without a restart.
+    static synchronized void reloadConfig(String configId) {
+        if (!configId) return
+        registry.remove(configId)
+        agentRegistry.remove(configId)
+        ensureAgentBuilt(configId)
     }
 
     static boolean isInitialized() { !registry.isEmpty() }
@@ -759,6 +783,139 @@ CRITICAL tool-use rules — follow exactly:
             logger.warn("lookupToolMode failed for ${configId}: ${e.message}")
             return 'readOnly'
         }
+    }
+
+    // ── Phase 4: multi-agent orchestration ──────────────────────────────────────
+
+    /** Read a config's orchestration role: [role, type, loopMax]. null for rows that don't
+     *  exist (DEFAULT/INTERACTIVE) or plain specialists. */
+    private static Map lookupOrchestration(String configId) {
+        if (!configId || configId == DEFAULT_CONFIG || sharedSessionService == null) return null
+        try {
+            def ec = sharedSessionService.ecf.getExecutionContext()
+            boolean wasDisabled = ec.artifactExecution.disableAuthz()
+            try {
+                def cfg = ec.entity.find('moqui.adk.AdkAgentConfig')
+                        .condition('adkAgentConfigId', configId).one()
+                String role = cfg?.agentRole as String
+                if (!role || role == 'specialist') return null
+                return [role: role, type: (cfg.orchestrationType ?: 'router') as String,
+                        loopMax: cfg.loopMaxIterations as Integer]
+            } finally { if (!wasDisabled) ec.artifactExecution.enableAuthz() }
+        } catch (Exception e) {
+            logger.warn("lookupOrchestration failed for ${configId}: ${e.message}")
+            return null
+        }
+    }
+
+    /** Enabled team members of a coordinator, owner-scoped (cross-tenant members rejected),
+     *  ordered by sequenceNum. Each entry: [memberConfigId, agentName, description, delegationMode]. */
+    private static List<Map> loadTeamMembers(String coordinatorConfigId, String ownerPartyId) {
+        List<Map> out = []
+        try {
+            def ec = sharedSessionService.ecf.getExecutionContext()
+            boolean wasDisabled = ec.artifactExecution.disableAuthz()
+            try {
+                def rows = ec.entity.find('moqui.adk.AdkAgentTeamMember')
+                        .condition('coordinatorConfigId', coordinatorConfigId)
+                        .condition('enabled', 'Y').orderBy('sequenceNum').list()
+                for (def r in rows) {
+                    def mc = ec.entity.find('moqui.adk.AdkAgentConfig')
+                            .condition('adkAgentConfigId', r.memberConfigId as String).one()
+                    if (!mc) continue
+                    // tenant guard: a member must belong to the coordinator's company
+                    if (ownerPartyId && mc.ownerPartyId && (mc.ownerPartyId as String) != (ownerPartyId as String)) {
+                        logger.warn("Skipping cross-tenant team member ${r.memberConfigId} (owner ${mc.ownerPartyId}) of coordinator ${coordinatorConfigId} (owner ${ownerPartyId})")
+                        continue
+                    }
+                    out.add([memberConfigId: r.memberConfigId as String,
+                             agentName: mc.agentName as String,
+                             description: mc.description as String,
+                             delegationMode: (r.delegationMode ?: 'tool') as String])
+                }
+            } finally { if (!wasDisabled) ec.artifactExecution.enableAuthz() }
+        } catch (Exception e) {
+            logger.warn("loadTeamMembers failed for ${coordinatorConfigId}: ${e.message}")
+        }
+        return out
+    }
+
+    /** Return a member agent's LlmAgent, building it on demand from its config row. Cycle-safe
+     *  (returns null if the config is mid-build). */
+    private static LlmAgent ensureAgentBuilt(String configId) {
+        if (!configId) return null
+        if (agentRegistry.containsKey(configId)) return agentRegistry[configId]
+        if (sharedSessionService == null || buildingConfigs.contains(configId)) return agentRegistry[configId]
+        try {
+            def ec = sharedSessionService.ecf.getExecutionContext()
+            boolean wasDisabled = ec.artifactExecution.disableAuthz()
+            def cfg
+            try {
+                cfg = ec.entity.find('moqui.adk.AdkAgentConfig').condition('adkAgentConfigId', configId).one()
+            } finally { if (!wasDisabled) ec.artifactExecution.enableAuthz() }
+            if (!cfg) return null
+            String provider = cfg.llmProvider ?: 'gemini'
+            String key = (cfg.apiKey as String) ?: resolveTenantKey(cfg.ownerPartyId as String)
+            initConfig(configId, cfg.ownerPartyId as String, cfg.agentName as String,
+                    cfg.modelName as String, cfg.instruction as String, key, provider)
+        } catch (Exception e) {
+            logger.warn("ensureAgentBuilt failed for ${configId}: ${e.message}")
+        }
+        return agentRegistry[configId]
+    }
+
+    /** Build a coordinator LlmAgent that delegates to its team members as AgentTools (router).
+     *  sequential/parallel/loop orchestration is Phase 4b — for now it routes via AgentTool too. */
+    private static LlmAgent buildOrchestrator(String configId, String ownerPartyId,
+                                              String agentName, def modelArg, Map orch) {
+        def members = loadTeamMembers(configId, ownerPartyId)
+        if (!members) {
+            logger.warn("Coordinator ${configId} has no enabled team members — leaving as a plain agent")
+            return null
+        }
+        buildingConfigs.add(configId)
+        List memberTools = []
+        List<String> roster = []
+        try {
+            for (def m in members) {
+                if (m.memberConfigId == configId) continue   // no self-membership
+                LlmAgent ma = ensureAgentBuilt(m.memberConfigId)
+                if (ma == null) continue
+                memberTools.add(com.google.adk.tools.AgentTool.create(ma))
+                roster.add('- ' + ma.name() + (m.description ? (': ' + m.description) : ''))
+            }
+        } finally {
+            buildingConfigs.remove(configId)
+        }
+        if (memberTools.isEmpty()) {
+            logger.warn("Coordinator ${configId}: no member agents could be built — leaving as a plain agent")
+            return null
+        }
+        if (orch.type && orch.type != 'router') {
+            logger.warn("orchestrationType '${orch.type}' for ${configId} is Phase 4b; routing via AgentTool for now")
+        }
+        // Give the coordinator its own Moqui MCP toolset too, so it can answer simple questions
+        // and emit screen directives directly without always delegating.
+        def own = configMcpToolsets[configId]
+        if (own) memberTools.add(own)
+
+        String coordInstr = CONTEXT_PREAMBLE + '''\
+You are the COORDINATOR agent for this company. You lead a team of specialist agents, each
+exposed to you as a tool you can call with a natural-language request:
+''' + roster.join('\n') + '''
+
+When a request matches a specialist, CALL that specialist's tool with the user's full request and
+relay (or briefly summarise) its answer — never fabricate what a specialist would say. You may call
+more than one specialist and combine their answers. For general questions you can answer directly or
+use your own Moqui tools. Keep delegation minimal: pick the best-matching specialist, call it once.
+'''
+        return LlmAgent.builder()
+                .name(agentName ?: ('coordinator_' + configId))
+                .description('GrowERP coordinator delegating to specialist agents')
+                .instruction(coordInstr)
+                .model(modelArg)
+                .tools(memberTools)
+                .build()
     }
 
     static void destroy() {

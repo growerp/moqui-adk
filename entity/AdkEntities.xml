@@ -28,6 +28,29 @@
         <field name="approvalChatRoomId" type="id"/>
         <!-- party the agent acts as (audit attribution); default AGENT_<ownerPartyId> -->
         <field name="agentPartyId"     type="id"/>
+        <!-- Multi-agent orchestration (Phase 4) -->
+        <!-- agentRole: specialist (default) | coordinator | workflow -->
+        <field name="agentRole"          type="text-short"/>
+        <!-- orchestrationType (coordinator/workflow only): router | sequential | parallel | loop -->
+        <field name="orchestrationType"  type="text-short"/>
+        <!-- loop orchestration safety cap -->
+        <field name="loopMaxIterations"  type="number-integer"/>
+    </entity>
+
+    <!-- Phase 4: members of a coordinator/workflow agent's team. A coordinator delegates to
+         each member (default as an AgentTool; transfer optional). Tenant-keyed: a member's
+         owner must equal the coordinator's owner (no cross-tenant teams). -->
+    <entity entity-name="AdkAgentTeamMember" package="moqui.adk" use="configuration">
+        <field name="adkAgentTeamMemberId" type="id" is-pk="true"/>
+        <field name="ownerPartyId"         type="id"/>
+        <field name="coordinatorConfigId"  type="id"/>
+        <field name="memberConfigId"       type="id"/>
+        <field name="sequenceNum"          type="number-integer"/>
+        <!-- delegationMode: tool (default) | transfer -->
+        <field name="delegationMode"       type="text-short"/>
+        <field name="enabled"              type="text-indicator"/>
+        <index name="ADKTEAM_COORD"><index-field name="coordinatorConfigId"/></index>
+        <index name="ADKTEAM_OWNER"><index-field name="ownerPartyId"/></index>
     </entity>
 
     <!-- Persistent ADK sessions (replaces in-memory InMemorySessionService) -->
@@ -54,6 +77,8 @@
         <field name="adkActionLogId" type="id" is-pk="true"/>
         <field name="ownerPartyId"   type="id"/>
         <field name="configId"       type="id"/>
+        <!-- coordinator that delegated to this agent, when part of a team (Phase 4) -->
+        <field name="parentConfigId" type="id"/>
         <field name="adkSessionId"   type="id"/>
         <field name="agentPartyId"   type="id"/>
         <field name="toolName"       type="text-short"/>

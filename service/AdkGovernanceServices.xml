@@ -18,6 +18,8 @@
             audit-log, and queue write actions for human approval per the agent's writePolicy.</description>
         <in-parameters>
             <parameter name="configId"/>
+            <!-- coordinator that delegated to this agent, when part of a team (Phase 4) -->
+            <parameter name="parentConfigId"/>
             <parameter name="toolName"/>
             <parameter name="serviceName" required="true"/>
             <parameter name="parameters" type="Map"><default>[:]</default></parameter>
@@ -122,10 +124,10 @@
 
             <!-- Audit log (always) -->
             <service-call name="create#moqui.adk.AdkActionLog" out-map="logOut"
-                in-map="[ownerPartyId: ownerPartyId, configId: configId, adkSessionId: adkSessionId,
-                         agentPartyId: agentPartyId, toolName: toolName, serviceName: serviceName,
-                         argsJson: argsJson, verbClass: verbClass, decision: decision,
-                         reason: message, actionTime: ec.user.nowTimestamp]"/>
+                in-map="[ownerPartyId: ownerPartyId, configId: configId, parentConfigId: parentConfigId,
+                         adkSessionId: adkSessionId, agentPartyId: agentPartyId, toolName: toolName,
+                         serviceName: serviceName, argsJson: argsJson, verbClass: verbClass,
+                         decision: decision, reason: message, actionTime: ec.user.nowTimestamp]"/>
             <set field="adkActionLogId" from="logOut.adkActionLogId"/>
 
             <!-- Pending → create approval + post an approval card to the agent's chat room -->

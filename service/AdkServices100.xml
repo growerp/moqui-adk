@@ -32,6 +32,9 @@
                     writePolicy       : cfg.writePolicy ?: 'approve',
                     approvalChatRoomId: cfg.approvalChatRoomId,
                     agentPartyId      : cfg.agentPartyId,
+                    agentRole         : cfg.agentRole ?: 'specialist',
+                    orchestrationType : cfg.orchestrationType,
+                    loopMaxIterations : cfg.loopMaxIterations,
                 ]"/>
                 <script>adkAgentConfigs.add(cfgOut)</script>
             </iterate>
@@ -54,6 +57,9 @@
             <parameter name="serviceAllowlist"/>
             <parameter name="writePolicy"/>
             <parameter name="approvalChatRoomId"/>
+            <parameter name="agentRole"/>
+            <parameter name="orchestrationType"/>
+            <parameter name="loopMaxIterations" type="Integer"/>
         </in-parameters>
         <out-parameters>
             <parameter name="adkAgentConfig" type="Map"/>
@@ -70,7 +76,9 @@
                           schedulePrompt: schedulePrompt,
                           scheduleChatRoomId: scheduleChatRoomId,
                           toolMode: toolMode, serviceAllowlist: serviceAllowlist,
-                          writePolicy: writePolicy, approvalChatRoomId: approvalChatRoomId]"/>
+                          writePolicy: writePolicy, approvalChatRoomId: approvalChatRoomId,
+                          agentRole: agentRole, orchestrationType: orchestrationType,
+                          loopMaxIterations: loopMaxIterations]"/>
             <entity-find-one entity-name="moqui.adk.AdkAgentConfig" value-field="cfg"
                 auto-field-map="[adkAgentConfigId: adkAgentConfigId]"/>
             <set field="adkAgentConfig" from="[
@@ -90,6 +98,9 @@
                 writePolicy       : cfg.writePolicy ?: 'approve',
                 approvalChatRoomId: cfg.approvalChatRoomId,
                 agentPartyId      : cfg.agentPartyId,
+                agentRole         : cfg.agentRole ?: 'specialist',
+                orchestrationType : cfg.orchestrationType,
+                loopMaxIterations : cfg.loopMaxIterations,
             ]"/>
         </actions>
     </service>
@@ -111,6 +122,9 @@
             <parameter name="serviceAllowlist"/>
             <parameter name="writePolicy"/>
             <parameter name="approvalChatRoomId"/>
+            <parameter name="agentRole"/>
+            <parameter name="orchestrationType"/>
+            <parameter name="loopMaxIterations" type="Integer"/>
         </in-parameters>
         <out-parameters>
             <parameter name="adkAgentConfig" type="Map"/>
@@ -132,7 +146,9 @@
                           schedulePrompt: schedulePrompt,
                           scheduleChatRoomId: scheduleChatRoomId,
                           toolMode: toolMode, serviceAllowlist: serviceAllowlist,
-                          writePolicy: writePolicy, approvalChatRoomId: approvalChatRoomId]"/>
+                          writePolicy: writePolicy, approvalChatRoomId: approvalChatRoomId,
+                          agentRole: agentRole, orchestrationType: orchestrationType,
+                          loopMaxIterations: loopMaxIterations]"/>
             <entity-find-one entity-name="moqui.adk.AdkAgentConfig" value-field="cfg"
                 auto-field-map="[adkAgentConfigId: adkAgentConfigId]"/>
             <set field="adkAgentConfig" from="[
@@ -152,6 +168,9 @@
                 writePolicy       : cfg.writePolicy ?: 'approve',
                 approvalChatRoomId: cfg.approvalChatRoomId,
                 agentPartyId      : cfg.agentPartyId,
+                agentRole         : cfg.agentRole ?: 'specialist',
+                orchestrationType : cfg.orchestrationType,
+                loopMaxIterations : cfg.loopMaxIterations,
             ]"/>
         </actions>
     </service>
@@ -191,6 +210,74 @@
     <service verb="reload" noun="Adk">
         <actions>
             <script>org.moqui.adk.AdkManager.reloadInteractive(ec.factory)</script>
+        </actions>
+    </service>
+
+    <!-- ── Phase 4: agent team membership (a coordinator's delegates) ──────────── -->
+    <service verb="get" noun="AdkAgentTeam">
+        <in-parameters><parameter name="coordinatorConfigId" required="true"/></in-parameters>
+        <out-parameters><parameter name="members" type="List"/></out-parameters>
+        <actions>
+            <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner" out-map="context"/>
+            <entity-find entity-name="moqui.adk.AdkAgentTeamMember" list="rows">
+                <econdition field-name="coordinatorConfigId"/>
+                <econdition field-name="ownerPartyId" from="ownerPartyId" ignore-if-empty="true"/>
+                <order-by field-name="sequenceNum"/>
+            </entity-find>
+            <set field="members" from="[]"/>
+            <iterate list="rows" entry="r">
+                <entity-find-one entity-name="moqui.adk.AdkAgentConfig" value-field="mc"
+                    auto-field-map="[adkAgentConfigId: r.memberConfigId]"/>
+                <script>members.add([
+                    adkAgentTeamMemberId: r.adkAgentTeamMemberId, coordinatorConfigId: r.coordinatorConfigId,
+                    memberConfigId: r.memberConfigId, memberName: mc?.agentName, memberDescription: mc?.description,
+                    sequenceNum: r.sequenceNum, delegationMode: r.delegationMode ?: 'tool',
+                    enabled: r.enabled == 'Y' ])</script>
+            </iterate>
+        </actions>
+    </service>
+
+    <service verb="create" noun="AdkAgentTeam">
+        <in-parameters>
+            <parameter name="coordinatorConfigId" required="true"/>
+            <parameter name="memberConfigId" required="true"/>
+            <parameter name="sequenceNum" type="Integer"/>
+            <parameter name="delegationMode"/>
+        </in-parameters>
+        <out-parameters><parameter name="adkAgentTeamMemberId"/></out-parameters>
+        <actions>
+            <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner" out-map="context"/>
+            <!-- both coordinator and member must belong to the caller's company -->
+            <entity-find-one entity-name="moqui.adk.AdkAgentConfig" value-field="coord"
+                auto-field-map="[adkAgentConfigId: coordinatorConfigId]"/>
+            <entity-find-one entity-name="moqui.adk.AdkAgentConfig" value-field="memb"
+                auto-field-map="[adkAgentConfigId: memberConfigId]"/>
+            <if condition="!coord || !memb || coord.ownerPartyId != ownerPartyId || memb.ownerPartyId != ownerPartyId">
+                <return error="true" message="Coordinator and member must both belong to your company."/>
+            </if>
+            <if condition="coordinatorConfigId == memberConfigId">
+                <return error="true" message="An agent cannot be its own team member."/>
+            </if>
+            <service-call name="create#moqui.adk.AdkAgentTeamMember" out-map="context"
+                in-map="[ownerPartyId: ownerPartyId, coordinatorConfigId: coordinatorConfigId,
+                         memberConfigId: memberConfigId, sequenceNum: sequenceNum,
+                         delegationMode: delegationMode ?: 'tool', enabled: 'Y']"/>
+            <!-- rebuild the coordinator runtime so it picks up the new member -->
+            <script>org.moqui.adk.AdkManager.reloadConfig(coordinatorConfigId)</script>
+        </actions>
+    </service>
+
+    <service verb="delete" noun="AdkAgentTeam">
+        <in-parameters><parameter name="adkAgentTeamMemberId" required="true"/></in-parameters>
+        <actions>
+            <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner" out-map="context"/>
+            <entity-find-one entity-name="moqui.adk.AdkAgentTeamMember" value-field="tm"
+                auto-field-map="[adkAgentTeamMemberId: adkAgentTeamMemberId]"/>
+            <if condition="tm &amp;&amp; tm.ownerPartyId == ownerPartyId">
+                <set field="coordId" from="tm.coordinatorConfigId"/>
+                <entity-delete value-field="tm"/>
+                <script>org.moqui.adk.AdkManager.reloadConfig(coordId)</script>
+            </if>
         </actions>
     </service>
 
