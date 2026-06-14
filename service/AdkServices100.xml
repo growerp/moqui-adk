@@ -136,6 +136,7 @@
                 auto-field-map="[adkAgentConfigId: adkAgentConfigId]"/>
             <service-call name="AdkServices.update#AgentConfig" out-map="context"
                 in-map="[ownerPartyId: ownerPartyId,
+                          adkAgentConfigId: adkAgentConfigId,
                           agentName: agentName ?: existing?.agentName,
                           modelName: modelName ?: existing?.modelName,
                           apiKey: apiKey, llmProvider: llmProvider,

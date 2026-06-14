@@ -7,6 +7,7 @@
             Multiple configs can be active simultaneously — one per ownerPartyId (tenant).
             Authentication is enforced at the servlet level (/adk/* requires AdkUsers/ADMIN).</description>
         <in-parameters>
+            <parameter name="adkAgentConfigId"/>
             <parameter name="ownerPartyId"/>
             <parameter name="agentName"/>
             <parameter name="modelName"   default-value="gemini-2.5-flash"/>
@@ -33,13 +34,24 @@
             <parameter name="adkAgentConfigId"/>
         </out-parameters>
         <actions>
-            <!-- Upsert by (ownerPartyId, agentName) — leave other tenants' configs untouched -->
-            <entity-find entity-name="moqui.adk.AdkAgentConfig" list="existingList" for-update="true">
-                <econdition field-name="agentName"   from="agentName"   ignore-if-empty="true"/>
-                <econdition field-name="ownerPartyId" from="ownerPartyId" ignore-if-empty="true"/>
-            </entity-find>
-            <if condition="existingList">
-                <set field="existing" from="existingList[0]"/>
+            <!-- Edit (id given) updates that exact row — so renames don't create a duplicate.
+                 Create (no id) upserts by (ownerPartyId, agentName). -->
+            <if condition="adkAgentConfigId">
+                <entity-find-one entity-name="moqui.adk.AdkAgentConfig" value-field="existing" for-update="true">
+                    <field-map field-name="adkAgentConfigId"/>
+                </entity-find-one>
+                <else>
+                    <entity-find entity-name="moqui.adk.AdkAgentConfig" list="existingList" for-update="true">
+                        <econdition field-name="agentName"   from="agentName"   ignore-if-empty="true"/>
+                        <econdition field-name="ownerPartyId" from="ownerPartyId" ignore-if-empty="true"/>
+                    </entity-find>
+                    <if condition="existingList"><set field="existing" from="existingList[0]"/></if>
+                </else>
+            </if>
+            <if condition="existing">
+                <if condition="agentName">
+                    <set field="existing.agentName" from="agentName"/>
+                </if>
                 <set field="existing.modelName"          from="modelName"/>
                 <if condition="apiKey"><set field="existing.apiKey" from="apiKey"/></if>
                 <if condition="llmProvider != null"><set field="existing.llmProvider" from="llmProvider"/></if>
