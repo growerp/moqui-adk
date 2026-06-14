@@ -3,6 +3,7 @@
     xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-2.1.xsd">
 
     <service verb="get" noun="AdkAgentConfig">
+        <in-parameters><parameter name="search"/></in-parameters>
         <out-parameters>
             <parameter name="adkAgentConfigs" type="List"/>
         </out-parameters>
@@ -11,6 +12,8 @@
                 out-map="context"/>
             <entity-find entity-name="moqui.adk.AdkAgentConfig" list="cfgList">
                 <econdition field-name="ownerPartyId" from="ownerPartyId" ignore-if-empty="true"/>
+                <econdition field-name="agentName" operator="like" ignore-case="true"
+                    from="search ? ('%' + search + '%') : null" ignore-if-empty="true"/>
                 <order-by field-name="agentName"/>
             </entity-find>
             <set field="adkAgentConfigs" from="[]"/>
@@ -283,6 +286,7 @@
     </service>
 
     <service verb="get" noun="AdkJob">
+        <in-parameters><parameter name="search"/></in-parameters>
         <out-parameters>
             <parameter name="adkJobs" type="List"/>
         </out-parameters>
@@ -335,7 +339,9 @@
                     latestEnd     : latestRun?.endTime?.toString(),
                     latestErrors  : latestRun?.errors,
                 ]"/>
-                <script>adkJobs.add(jobOut)</script>
+                <if condition="!search || (agentName ?: '').toLowerCase().contains(search.toLowerCase())">
+                    <script>adkJobs.add(jobOut)</script>
+                </if>
             </iterate>
         </actions>
     </service>
@@ -414,6 +420,7 @@
     <service verb="get" noun="AdkAction">
         <in-parameters>
             <parameter name="configId"/>
+            <parameter name="search"/>
             <parameter name="limit" type="Integer" default="100"/>
         </in-parameters>
         <out-parameters><parameter name="adkActions" type="List"/></out-parameters>
@@ -422,6 +429,14 @@
             <entity-find entity-name="moqui.adk.AdkActionLog" list="rows">
                 <econdition field-name="ownerPartyId" from="ownerPartyId" ignore-if-empty="true"/>
                 <econdition field-name="configId" from="configId" ignore-if-empty="true"/>
+                <econditions combine="or">
+                    <econdition field-name="serviceName" operator="like" ignore-case="true"
+                        from="search ? ('%' + search + '%') : null" ignore-if-empty="true"/>
+                    <econdition field-name="toolName" operator="like" ignore-case="true"
+                        from="search ? ('%' + search + '%') : null" ignore-if-empty="true"/>
+                    <econdition field-name="reason" operator="like" ignore-case="true"
+                        from="search ? ('%' + search + '%') : null" ignore-if-empty="true"/>
+                </econditions>
                 <order-by field-name="-actionTime"/>
                 <limit>${limit}</limit>
             </entity-find>
@@ -442,6 +457,7 @@
     <service verb="get" noun="AdkApproval">
         <in-parameters>
             <parameter name="status" default-value="pending"/>
+            <parameter name="search"/>
         </in-parameters>
         <out-parameters><parameter name="adkApprovals" type="List"/></out-parameters>
         <actions>
@@ -449,6 +465,8 @@
             <entity-find entity-name="moqui.adk.AdkApproval" list="rows">
                 <econdition field-name="ownerPartyId" from="ownerPartyId" ignore-if-empty="true"/>
                 <econdition field-name="status" from="status" ignore-if-empty="true"/>
+                <econdition field-name="serviceName" operator="like" ignore-case="true"
+                    from="search ? ('%' + search + '%') : null" ignore-if-empty="true"/>
                 <order-by field-name="-requestTime"/>
             </entity-find>
             <set field="adkApprovals" from="[]"/>
