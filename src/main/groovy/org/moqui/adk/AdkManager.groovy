@@ -591,6 +591,49 @@ CRITICAL tool-use rules — follow exactly:
         t.start()
     }
 
+    /**
+     * Record an explicit delegation row in AdkActionLog for each specialist (other than the
+     * session's coordinator) that authored an event this turn — so Agent Actions shows
+     * "Coordinator → Specialist" at a glance, not just inferred from per-member configIds.
+     * Async/best-effort. No-op for single-agent sessions (only the agent itself authors).
+     */
+    static void logDelegations(String sessionId, Set<String> authors) {
+        if (!sessionId || !authors || authors.isEmpty() || sharedSessionService == null) return
+        String coordId = sessionOwn[sessionId] ?: lookupConfigIdFromDb(sessionId)
+        if (!coordId) return
+        def ecf = sharedSessionService.ecf
+        Thread t = new Thread({
+            def ec = ecf.getExecutionContext()
+            try {
+                boolean wasDisabled = ec.artifactExecution.disableAuthz()
+                try {
+                    def coord = ec.entity.find('moqui.adk.AdkAgentConfig')
+                            .condition('adkAgentConfigId', coordId).one()
+                    if (!coord) return
+                    String owner = coord.ownerPartyId as String
+                    String coordName = coord.agentName as String
+                    for (String a in authors) {
+                        if (!a || a == coordName || a == 'growerp-agent') continue
+                        // map the responding agent name → a team member config of this owner
+                        def member = ec.entity.find('moqui.adk.AdkAgentConfig')
+                                .condition('ownerPartyId', owner).condition('agentName', a).one()
+                        if (!member) continue
+                        ec.service.sync().name('create#moqui.adk.AdkActionLog').parameters([
+                                ownerPartyId: owner, configId: member.adkAgentConfigId,
+                                parentConfigId: coordId, adkSessionId: sessionId,
+                                toolName: a, serviceName: 'delegate', verbClass: 'delegate',
+                                decision: 'delegated', reason: "${coordName} → ${a}",
+                                actionTime: ec.user.nowTimestamp]).call()
+                    }
+                } finally { if (!wasDisabled) ec.artifactExecution.enableAuthz() }
+            } catch (Exception e) {
+                logger.warn("logDelegations(${sessionId}) failed: ${e.message}")
+            } finally { ec.destroy() }
+        }, 'adk-delegation-log')
+        t.setDaemon(true)
+        t.start()
+    }
+
     static List<Map> runAgent(String userId, String sessionId, String text) {
         Content userContent = buildUserContent(text)
         List<Map> events = []
@@ -601,6 +644,7 @@ CRITICAL tool-use rules — follow exactly:
                 { Throwable t -> err[0] = t; logger.error("ADK runAgent error (session={}): {}", sessionId, t.message, t) }
             )
         if (err[0]) throw err[0]
+        logDelegations(sessionId, events.collect { it.author } as Set)
         maybeSummarize(sessionId)
         events
     }
@@ -652,11 +696,12 @@ CRITICAL tool-use rules — follow exactly:
     static void runAgentSse(String userId, String sessionId, String text,
                             Closure eventCallback, Closure doneCallback) {
         Content userContent = buildUserContent(text)
+        Set<String> authors = java.util.concurrent.ConcurrentHashMap.newKeySet()
         runnerForSession(sessionId).runAsync(userId, sessionId, userContent, defaultRunConfig())
             .subscribe(
-                { Event e -> eventCallback(eventToMap(e)) },
+                { Event e -> if (e.author()) authors.add(e.author()); eventCallback(eventToMap(e)) },
                 { Throwable t -> doneCallback(t) },
-                { maybeSummarize(sessionId); doneCallback(null) }
+                { logDelegations(sessionId, authors); maybeSummarize(sessionId); doneCallback(null) }
             )
     }
 
