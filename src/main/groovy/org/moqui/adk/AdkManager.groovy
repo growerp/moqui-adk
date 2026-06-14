@@ -204,23 +204,8 @@ pre-filled dialog. Order/shipment specifics still work: "enter a sales order" �
         String toolMode = lookupToolMode(configId)
         boolean allowWrites = toolMode != 'readOnly'
 
-        // FunctionTool.create returns List<FunctionTool> — build combined list then pass to tools()
-        List allTools = new ArrayList()
-        allTools.addAll(com.google.adk.tools.FunctionTool.create(HelloTimeAgent.class, 'getCurrentTime'))
-        // Read-only custom tools
-        allTools.addAll(com.google.adk.tools.FunctionTool.create(EmailTool.class, 'readEmails'))
-        allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'getLatestTestRun'))
-        allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'getTestExceptions'))
-        allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'getMainSha'))
-        allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'getFileContent'))
-        // Write/side-effect custom tools — only for non-read-only agents
-        if (allowWrites) {
-            allTools.addAll(com.google.adk.tools.FunctionTool.create(EmailTool.class, 'sendEmail'))
-            allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'createBranch'))
-            allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'updateFileContent'))
-            allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'createPullRequest'))
-            allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'addComment'))
-        }
+        // In-process FunctionTools (read-only set + writes when allowed), plus the MCP toolset.
+        List allTools = assembleFunctionTools(allowWrites)
         if (agentMcpToolset) allTools.add(agentMcpToolset)
 
         if (!agentName) {
@@ -873,6 +858,53 @@ CRITICAL tool-use rules — follow exactly:
 
     /** Build a coordinator LlmAgent that delegates to its team members as AgentTools (router).
      *  sequential/parallel/loop orchestration is Phase 4b — for now it routes via AgentTool too. */
+    /** The in-process FunctionTools every agent gets (read-only set, plus write tools when allowed). */
+    private static List assembleFunctionTools(boolean allowWrites) {
+        List allTools = new ArrayList()
+        allTools.addAll(com.google.adk.tools.FunctionTool.create(HelloTimeAgent.class, 'getCurrentTime'))
+        allTools.addAll(com.google.adk.tools.FunctionTool.create(EmailTool.class, 'readEmails'))
+        allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'getLatestTestRun'))
+        allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'getTestExceptions'))
+        allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'getMainSha'))
+        allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'getFileContent'))
+        if (allowWrites) {
+            allTools.addAll(com.google.adk.tools.FunctionTool.create(EmailTool.class, 'sendEmail'))
+            allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'createBranch'))
+            allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'updateFileContent'))
+            allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'createPullRequest'))
+            allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'addComment'))
+        }
+        return allTools
+    }
+
+    /** Build a FRESH LlmAgent instance for a workflow sub-agent (Sequential/Parallel/Loop set a
+     *  parent on their sub-agents, so we must not reuse the registry-shared instance). It reuses the
+     *  member's already-built McpToolset (same adk_config_id/owner → governance preserved, no extra
+     *  SSE connection). Not registered in the registry. */
+    private static com.google.adk.agents.BaseAgent buildMemberInstance(String memberConfigId, def modelArg) {
+        if (!memberConfigId) return null
+        ensureAgentBuilt(memberConfigId)   // ensures the cached McpToolset + standalone runner exist
+        def cfg
+        try {
+            def ec = sharedSessionService.ecf.getExecutionContext()
+            boolean wasDisabled = ec.artifactExecution.disableAuthz()
+            try { cfg = ec.entity.find('moqui.adk.AdkAgentConfig').condition('adkAgentConfigId', memberConfigId).one() }
+            finally { if (!wasDisabled) ec.artifactExecution.enableAuthz() }
+        } catch (Exception e) { logger.warn("buildMemberInstance(${memberConfigId}) load failed: ${e.message}"); return null }
+        if (!cfg) return null
+        boolean allowWrites = (cfg.toolMode ?: 'full') != 'readOnly'
+        List tools = assembleFunctionTools(allowWrites)
+        def ts = configMcpToolsets[memberConfigId]
+        if (ts) tools.add(ts)
+        return LlmAgent.builder()
+                .name((cfg.agentName ?: memberConfigId) as String)
+                .description((cfg.description ?: cfg.agentName ?: 'GrowERP agent') as String)
+                .instruction(CONTEXT_PREAMBLE + ((cfg.instruction ?: '') as String))
+                .model(modelArg)
+                .tools(tools)
+                .build()
+    }
+
     private static LlmAgent buildOrchestrator(String configId, String ownerPartyId,
                                               String agentName, def modelArg, Map orch) {
         def members = loadTeamMembers(configId, ownerPartyId)
@@ -880,6 +912,42 @@ CRITICAL tool-use rules — follow exactly:
             logger.warn("Coordinator ${configId} has no enabled team members — leaving as a plain agent")
             return null
         }
+        String type = orch.type ?: 'router'
+
+        // ── Deterministic workflows: Sequential / Parallel / Loop run their sub-agents (no LLM
+        //    picking). Sub-agents must be FRESH instances (they get a parent). ──
+        if (type in ['sequential', 'parallel', 'loop']) {
+            List<com.google.adk.agents.BaseAgent> subAgents = []
+            buildingConfigs.add(configId)
+            try {
+                for (def m in members) {
+                    if (m.memberConfigId == configId) continue
+                    def inst = buildMemberInstance(m.memberConfigId as String, modelArg)
+                    if (inst != null) subAgents.add(inst)
+                }
+            } finally { buildingConfigs.remove(configId) }
+            if (subAgents.isEmpty()) {
+                logger.warn("Workflow ${configId}: no member agents could be built — leaving as a plain agent")
+                return null
+            }
+            String wfName = agentName ?: (type + '_' + configId)
+            String wfDesc = "GrowERP ${type} workflow over ${subAgents.size()} specialist(s)"
+            switch (type) {
+                case 'sequential':
+                    return com.google.adk.agents.SequentialAgent.builder()
+                            .name(wfName).description(wfDesc).subAgents(subAgents).build()
+                case 'parallel':
+                    return com.google.adk.agents.ParallelAgent.builder()
+                            .name(wfName).description(wfDesc).subAgents(subAgents).build()
+                case 'loop':
+                    return com.google.adk.agents.LoopAgent.builder()
+                            .name(wfName).description(wfDesc)
+                            .maxIterations((orch.loopMax ?: 3) as Integer)
+                            .subAgents(subAgents).build()
+            }
+        }
+
+        // ── Router (default): LLM picks a specialist, each wrapped as an AgentTool. ──
         buildingConfigs.add(configId)
         List memberTools = []
         List<String> roster = []
@@ -897,9 +965,6 @@ CRITICAL tool-use rules — follow exactly:
         if (memberTools.isEmpty()) {
             logger.warn("Coordinator ${configId}: no member agents could be built — leaving as a plain agent")
             return null
-        }
-        if (orch.type && orch.type != 'router') {
-            logger.warn("orchestrationType '${orch.type}' for ${configId} is Phase 4b; routing via AgentTool for now")
         }
         // Give the coordinator its own Moqui MCP toolset too, so it can answer simple questions
         // and emit screen directives directly without always delegating.
