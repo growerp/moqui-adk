@@ -637,16 +637,33 @@ CRITICAL tool-use rules — follow exactly:
     static List<Map> runAgent(String userId, String sessionId, String text) {
         Content userContent = buildUserContent(text)
         List<Map> events = []
+        Set<String> delegateNames = new HashSet<>()
         Throwable[] err  = [null]
         runnerForSession(sessionId).runAsync(userId, sessionId, userContent, defaultRunConfig())
             .blockingSubscribe(
-                { Event e -> events << eventToMap(e) },
+                { Event e -> collectDelegateNames(e, delegateNames); events << eventToMap(e) },
                 { Throwable t -> err[0] = t; logger.error("ADK runAgent error (session={}): {}", sessionId, t.message, t) }
             )
         if (err[0]) throw err[0]
-        logDelegations(sessionId, events.collect { it.author } as Set)
+        logDelegations(sessionId, delegateNames)
         maybeSummarize(sessionId)
         events
+    }
+
+    /** Names of specialists a coordinator delegated to this turn: event authors (workflow
+     *  sub-agents) + function-call names (router AgentTools — the inner runner doesn't surface
+     *  the specialist as an author, but the coordinator's functionCall is named after it). */
+    private static void collectDelegateNames(Event e, Set<String> acc) {
+        try {
+            if (e.author()) acc.add(e.author())
+            Optional<Content> co = e.content()
+            if (co?.isPresent() && co.get().parts()?.isPresent()) {
+                for (Part p in co.get().parts().get()) {
+                    def fc = p.functionCall()
+                    if (fc?.isPresent() && fc.get().name()?.isPresent()) acc.add(fc.get().name().get())
+                }
+            }
+        } catch (Exception ignore) {}
     }
 
     /**
@@ -696,12 +713,12 @@ CRITICAL tool-use rules — follow exactly:
     static void runAgentSse(String userId, String sessionId, String text,
                             Closure eventCallback, Closure doneCallback) {
         Content userContent = buildUserContent(text)
-        Set<String> authors = java.util.concurrent.ConcurrentHashMap.newKeySet()
+        Set<String> delegateNames = java.util.concurrent.ConcurrentHashMap.newKeySet()
         runnerForSession(sessionId).runAsync(userId, sessionId, userContent, defaultRunConfig())
             .subscribe(
-                { Event e -> if (e.author()) authors.add(e.author()); eventCallback(eventToMap(e)) },
+                { Event e -> collectDelegateNames(e, delegateNames); eventCallback(eventToMap(e)) },
                 { Throwable t -> doneCallback(t) },
-                { logDelegations(sessionId, authors); maybeSummarize(sessionId); doneCallback(null) }
+                { logDelegations(sessionId, delegateNames); maybeSummarize(sessionId); doneCallback(null) }
             )
     }
 
