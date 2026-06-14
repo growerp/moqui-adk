@@ -167,7 +167,8 @@ pre-filled dialog. Order/shipment specifics still work: "enter a sales order" �
     static synchronized void initConfig(String configId, String ownerPartyId,
                                         String agentName, String modelName,
                                         String instruction, String apiKey,
-                                        String llmProvider = 'gemini') {
+                                        String llmProvider = 'gemini',
+                                        String description = null) {
         String effectiveProvider = llmProvider ?: 'gemini'
 
         // Non-Google providers: store in side registry for future HTTP runner; skip Google ADK init
@@ -251,6 +252,10 @@ CRITICAL tool-use rules — follow exactly:
         } else {
             agent = LlmAgent.builder()
                     .name(agentName)
+                    // A non-null description is REQUIRED when this agent is wrapped as an
+                    // AgentTool by a coordinator (AgentTool.declaration NPEs on null), and it
+                    // tells the coordinator's LLM when to delegate here.
+                    .description(description ?: agentName ?: 'GrowERP agent')
                     .model(modelArg)
                     .instruction(CONTEXT_PREAMBLE + (instruction ?: ''))
                     .tools(allTools)
@@ -362,7 +367,8 @@ CRITICAL tool-use rules — follow exactly:
                     }
                     initConfig(cfg.getString('adkAgentConfigId'), cfg.getString('ownerPartyId'),
                             cfg.getString('agentName'), cfg.getString('modelName'),
-                            cfg.getString('instruction'), resolvedApiKey, provider)
+                            cfg.getString('instruction'), resolvedApiKey, provider,
+                            cfg.getString('description'))
                 }
             } catch (Exception ignored) {
                 for (def cfg in cfgList) {
@@ -370,7 +376,7 @@ CRITICAL tool-use rules — follow exactly:
                     initConfig(cfg.getString('adkAgentConfigId'), cfg.getString('ownerPartyId'),
                             cfg.getString('agentName'), cfg.getString('modelName'),
                             cfg.getString('instruction'), cfg.getString('apiKey') ?: '',
-                            cfg.getString('llmProvider') ?: 'gemini')
+                            cfg.getString('llmProvider') ?: 'gemini', cfg.getString('description'))
                 }
             } finally {
                 ec2?.destroy()
@@ -857,7 +863,8 @@ CRITICAL tool-use rules — follow exactly:
             String provider = cfg.llmProvider ?: 'gemini'
             String key = (cfg.apiKey as String) ?: resolveTenantKey(cfg.ownerPartyId as String)
             initConfig(configId, cfg.ownerPartyId as String, cfg.agentName as String,
-                    cfg.modelName as String, cfg.instruction as String, key, provider)
+                    cfg.modelName as String, cfg.instruction as String, key, provider,
+                    cfg.description as String)
         } catch (Exception e) {
             logger.warn("ensureAgentBuilt failed for ${configId}: ${e.message}")
         }

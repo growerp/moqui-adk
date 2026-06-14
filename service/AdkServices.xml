@@ -159,7 +159,8 @@
                     savedCfg.modelName    ?: 'gemini-2.5-flash',
                     savedCfg.instruction  ?: '',
                     resolvedApiKey,
-                    savedCfg.llmProvider  ?: 'gemini'
+                    savedCfg.llmProvider  ?: 'gemini',
+                    savedCfg.description  ?: null
                 )
             ]]></script>
         </actions>
