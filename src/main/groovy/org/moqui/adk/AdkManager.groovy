@@ -71,6 +71,9 @@ class AdkManager {
     // configId → per-agent McpToolset. Each carries an `adk_config_id` header so the
     // MCP governance gate can identify the calling agent and enforce its tenant/scope.
     private static final Map<String, com.google.adk.tools.mcp.McpToolset> configMcpToolsets = new ConcurrentHashMap<>()
+    // configId → external (tenant-registered) McpToolsets attached to that agent. Closed and
+    // rebuilt on reloadConfig; closed on destroy.
+    private static final Map<String, List<com.google.adk.tools.mcp.McpToolset>> configExternalToolsets = new ConcurrentHashMap<>()
     private static volatile String mcpApiKey = null
     static  volatile Map<String, Object>  currentConfig = [:]
 
@@ -207,6 +210,8 @@ pre-filled dialog. Order/shipment specifics still work: "enter a sales order" �
         // In-process FunctionTools (read-only set + writes when allowed), plus the MCP toolset.
         List allTools = assembleFunctionTools(allowWrites)
         if (agentMcpToolset) allTools.add(agentMcpToolset)
+        // External (tenant-registered) MCP servers attached to this agent.
+        loadExternalMcpToolsets(configId, ownerPartyId).each { allTools.add(it) }
 
         if (!agentName) {
             agent = LlmAgent.builder()
@@ -817,6 +822,65 @@ CRITICAL tool-use rules — follow exactly:
         return ts
     }
 
+    /** Build a toolset for an external (tenant-registered) MCP server. Unlike buildMcpToolset
+     *  this targets a third-party URL and sends only the server's own auth headers (from the
+     *  encrypted headersJson map) — no SystemSupport credentials. */
+    private static com.google.adk.tools.mcp.McpToolset buildExternalMcpToolset(def srv) {
+        Map<String, String> sseHeaders = ['Accept': 'application/json, text/event-stream']
+        String hj = srv.headersJson as String
+        if (hj) {
+            try {
+                def parsed = new groovy.json.JsonSlurper().parseText(hj)
+                if (parsed instanceof Map) parsed.each { k, v -> if (k && v != null) sseHeaders[k as String] = v as String }
+            } catch (Exception e) {
+                logger.warn("Bad headersJson for AdkMcpServer ${srv.adkMcpServerId}: ${e.message}")
+            }
+        }
+        def sseParams = com.google.adk.tools.mcp.SseServerParameters.builder()
+                .url(srv.url as String)
+                .headers(sseHeaders)
+                .build()
+        return new com.google.adk.tools.mcp.McpToolset(sseParams)
+    }
+
+    /** Build the toolsets for every enabled external MCP server attached to this agent.
+     *  Owner-guarded (a server must belong to the agent's tenant). Prior toolsets for the
+     *  configId are closed first so reloadConfig doesn't leak SSE connections. */
+    private static List<com.google.adk.tools.mcp.McpToolset> loadExternalMcpToolsets(String configId, String ownerPartyId) {
+        List<com.google.adk.tools.mcp.McpToolset> out = []
+        if (!configId || configId == DEFAULT_CONFIG || sharedSessionService == null) return out
+        def prior = configExternalToolsets.remove(configId)
+        if (prior) prior.each { try { it?.close() } catch (Exception ignore) {} }
+        try {
+            def ec = sharedSessionService.ecf.getExecutionContext()
+            boolean wasDisabled = ec.artifactExecution.disableAuthz()
+            try {
+                def links = ec.entity.find('moqui.adk.AdkAgentMcpServer')
+                        .condition('configId', configId).condition('enabled', 'Y')
+                        .orderBy('sequenceNum').list()
+                for (def lnk in links) {
+                    def srv = ec.entity.find('moqui.adk.AdkMcpServer')
+                            .condition('adkMcpServerId', lnk.adkMcpServerId as String).one()
+                    if (!srv || srv.enabled != 'Y') continue
+                    // tenant guard: the server must belong to the agent's company
+                    if (ownerPartyId && srv.ownerPartyId && (srv.ownerPartyId as String) != (ownerPartyId as String)) {
+                        logger.warn("Skipping cross-tenant MCP server ${srv.adkMcpServerId} (owner ${srv.ownerPartyId}) on agent ${configId} (owner ${ownerPartyId})")
+                        continue
+                    }
+                    try {
+                        out.add(buildExternalMcpToolset(srv))
+                    } catch (Exception e) {
+                        logger.warn("Failed to build external MCP toolset ${srv.adkMcpServerId} for ${configId}: ${e.message}")
+                    }
+                }
+            } finally { if (!wasDisabled) ec.artifactExecution.enableAuthz() }
+        } catch (Exception e) {
+            logger.warn("loadExternalMcpToolsets failed for ${configId}: ${e.message}")
+        }
+        if (out) configExternalToolsets[configId] = out
+        return out
+    }
+
     /** Read an agent's toolMode (readOnly | scoped | full) from its persisted config.
      *  Defaults to readOnly when unknown so new/unconfigured agents are safe by default. */
     private static String lookupToolMode(String configId) {
@@ -1057,6 +1121,10 @@ use your own Moqui tools. Keep delegation minimal: pick the best-matching specia
             try { ts?.close() } catch (Exception e) { logger.warn("Error closing per-config McpToolset: ${e.message}") }
         }
         configMcpToolsets.clear()
+        configExternalToolsets.values().each { list ->
+            list?.each { ts -> try { ts?.close() } catch (Exception e) { logger.warn("Error closing external McpToolset: ${e.message}") } }
+        }
+        configExternalToolsets.clear()
         if (mcpToolset != null) {
             try {
                 logger.info('Closing ADK McpToolset...')

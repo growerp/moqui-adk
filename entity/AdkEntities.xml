@@ -53,6 +53,36 @@
         <index name="ADKTEAM_OWNER"><index-field name="ownerPartyId"/></index>
     </entity>
 
+    <!-- Tenant-level registry of external (remote) MCP servers. A server is reachable over
+         SSE / streamable-HTTP and may carry an auth headers map (encrypted, never returned to
+         the client). Servers are attached to agents via AdkAgentMcpServer. Tenant-keyed. -->
+    <entity entity-name="AdkMcpServer" package="moqui.adk" use="configuration">
+        <field name="adkMcpServerId" type="id" is-pk="true"/>
+        <field name="ownerPartyId"   type="id"/>
+        <field name="serverName"     type="text-short"/>
+        <field name="url"            type="text-medium"/>
+        <!-- transport: sse (default) | http (streamable-HTTP) -->
+        <field name="transport"      type="text-short"/>
+        <!-- JSON object of header-name -> value, sent on connect. Encrypted at rest;
+             write-only via the API (get# never returns it). -->
+        <field name="headersJson"    type="text-long" encrypt="true"/>
+        <field name="enabled"        type="text-indicator"/>
+        <index name="ADKMCP_OWNER"><index-field name="ownerPartyId"/></index>
+    </entity>
+
+    <!-- Attach an AdkMcpServer to an agent. The agent gains that server's tools at runtime.
+         Tenant-keyed: the server's owner must equal the agent's owner (no cross-tenant use). -->
+    <entity entity-name="AdkAgentMcpServer" package="moqui.adk" use="configuration">
+        <field name="adkAgentMcpServerId" type="id" is-pk="true"/>
+        <field name="ownerPartyId"        type="id"/>
+        <field name="configId"            type="id"/>
+        <field name="adkMcpServerId"      type="id"/>
+        <field name="sequenceNum"         type="number-integer"/>
+        <field name="enabled"             type="text-indicator"/>
+        <index name="ADKAMCP_CFG"><index-field name="configId"/></index>
+        <index name="ADKAMCP_OWNER"><index-field name="ownerPartyId"/></index>
+    </entity>
+
     <!-- Persistent ADK sessions (replaces in-memory InMemorySessionService) -->
     <entity entity-name="AdkSession" package="moqui.adk" use="transactional">
         <field name="adkSessionId"   type="id" is-pk="true"/>

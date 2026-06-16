@@ -285,6 +285,171 @@
         </actions>
     </service>
 
+    <!-- ── External MCP server registry (tenant-level) ─────────────────────────── -->
+    <service verb="get" noun="AdkMcpServer">
+        <in-parameters><parameter name="search"/></in-parameters>
+        <out-parameters><parameter name="adkMcpServers" type="List"/></out-parameters>
+        <actions>
+            <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner" out-map="context"/>
+            <entity-find entity-name="moqui.adk.AdkMcpServer" list="rows">
+                <econdition field-name="ownerPartyId" from="ownerPartyId" ignore-if-empty="true"/>
+                <econdition field-name="serverName" operator="like" ignore-case="true"
+                    from="search ? ('%' + search + '%') : null" ignore-if-empty="true"/>
+                <order-by field-name="serverName"/>
+            </entity-find>
+            <set field="adkMcpServers" from="[]"/>
+            <iterate list="rows" entry="r">
+                <!-- headersJson is write-only: never returned to the client -->
+                <script>adkMcpServers.add([
+                    adkMcpServerId: r.adkMcpServerId, serverName: r.serverName,
+                    url: r.url, transport: r.transport ?: 'sse',
+                    enabled: r.enabled == 'Y' ])</script>
+            </iterate>
+        </actions>
+    </service>
+
+    <service verb="create" noun="AdkMcpServer">
+        <in-parameters>
+            <parameter name="serverName" required="true"/>
+            <parameter name="url" required="true"/>
+            <parameter name="transport"/>
+            <parameter name="headersJson"/>
+            <parameter name="enabled" type="Boolean" default="true"/>
+        </in-parameters>
+        <out-parameters><parameter name="adkMcpServer" type="Map"/></out-parameters>
+        <actions>
+            <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner" out-map="context"/>
+            <service-call name="create#moqui.adk.AdkMcpServer" out-map="context"
+                in-map="[ownerPartyId: ownerPartyId, serverName: serverName, url: url,
+                         transport: transport ?: 'sse', headersJson: headersJson,
+                         enabled: enabled ? 'Y' : 'N']"/>
+            <set field="adkMcpServer" from="[
+                adkMcpServerId: adkMcpServerId, serverName: serverName, url: url,
+                transport: transport ?: 'sse', enabled: enabled ]"/>
+        </actions>
+    </service>
+
+    <service verb="update" noun="AdkMcpServer">
+        <in-parameters>
+            <parameter name="adkMcpServerId" required="true"/>
+            <parameter name="serverName"/>
+            <parameter name="url"/>
+            <parameter name="transport"/>
+            <parameter name="headersJson"/>
+            <parameter name="enabled" type="Boolean"/>
+        </in-parameters>
+        <out-parameters><parameter name="adkMcpServer" type="Map"/></out-parameters>
+        <actions>
+            <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner" out-map="context"/>
+            <entity-find-one entity-name="moqui.adk.AdkMcpServer" value-field="srv"
+                auto-field-map="[adkMcpServerId: adkMcpServerId]"/>
+            <if condition="!srv || srv.ownerPartyId != ownerPartyId">
+                <return error="true" message="MCP server not found for your company."/>
+            </if>
+            <if condition="serverName"><set field="srv.serverName" from="serverName"/></if>
+            <if condition="url"><set field="srv.url" from="url"/></if>
+            <if condition="transport"><set field="srv.transport" from="transport"/></if>
+            <!-- only overwrite the secret when a new value is supplied -->
+            <if condition="headersJson"><set field="srv.headersJson" from="headersJson"/></if>
+            <if condition="enabled != null"><set field="srv.enabled" from="enabled ? 'Y' : 'N'"/></if>
+            <entity-update value-field="srv"/>
+            <!-- rebuild every agent that has this server attached so URL/header/enabled changes apply -->
+            <entity-find entity-name="moqui.adk.AdkAgentMcpServer" list="links">
+                <econdition field-name="adkMcpServerId"/>
+                <econdition field-name="ownerPartyId" from="ownerPartyId"/>
+            </entity-find>
+            <iterate list="links" entry="lnk">
+                <script>org.moqui.adk.AdkManager.reloadConfig(lnk.configId as String)</script>
+            </iterate>
+            <set field="adkMcpServer" from="[
+                adkMcpServerId: srv.adkMcpServerId, serverName: srv.serverName, url: srv.url,
+                transport: srv.transport ?: 'sse', enabled: srv.enabled == 'Y' ]"/>
+        </actions>
+    </service>
+
+    <service verb="delete" noun="AdkMcpServer">
+        <in-parameters><parameter name="adkMcpServerId" required="true"/></in-parameters>
+        <actions>
+            <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner" out-map="context"/>
+            <entity-find-one entity-name="moqui.adk.AdkMcpServer" value-field="srv"
+                auto-field-map="[adkMcpServerId: adkMcpServerId]"/>
+            <if condition="!srv || srv.ownerPartyId != ownerPartyId"><return/></if>
+            <!-- detach from every agent, then rebuild those agents -->
+            <entity-find entity-name="moqui.adk.AdkAgentMcpServer" list="links">
+                <econdition field-name="adkMcpServerId"/>
+                <econdition field-name="ownerPartyId" from="ownerPartyId"/>
+            </entity-find>
+            <iterate list="links" entry="lnk">
+                <set field="cfgId" from="lnk.configId"/>
+                <entity-delete value-field="lnk"/>
+                <script>org.moqui.adk.AdkManager.reloadConfig(cfgId as String)</script>
+            </iterate>
+            <entity-delete value-field="srv"/>
+        </actions>
+    </service>
+
+    <!-- ── Attach / detach an MCP server to an agent ───────────────────────────── -->
+    <service verb="get" noun="AdkAgentMcpServer">
+        <in-parameters><parameter name="configId" required="true"/></in-parameters>
+        <out-parameters><parameter name="servers" type="List"/></out-parameters>
+        <actions>
+            <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner" out-map="context"/>
+            <entity-find entity-name="moqui.adk.AdkAgentMcpServer" list="rows">
+                <econdition field-name="configId"/>
+                <econdition field-name="ownerPartyId" from="ownerPartyId" ignore-if-empty="true"/>
+                <order-by field-name="sequenceNum"/>
+            </entity-find>
+            <set field="servers" from="[]"/>
+            <iterate list="rows" entry="r">
+                <entity-find-one entity-name="moqui.adk.AdkMcpServer" value-field="srv"
+                    auto-field-map="[adkMcpServerId: r.adkMcpServerId]"/>
+                <script>servers.add([
+                    adkAgentMcpServerId: r.adkAgentMcpServerId, configId: r.configId,
+                    adkMcpServerId: r.adkMcpServerId, serverName: srv?.serverName,
+                    url: srv?.url, transport: srv?.transport ?: 'sse',
+                    sequenceNum: r.sequenceNum, enabled: r.enabled == 'Y' ])</script>
+            </iterate>
+        </actions>
+    </service>
+
+    <service verb="create" noun="AdkAgentMcpServer">
+        <in-parameters>
+            <parameter name="configId" required="true"/>
+            <parameter name="adkMcpServerId" required="true"/>
+            <parameter name="sequenceNum" type="Integer"/>
+        </in-parameters>
+        <out-parameters><parameter name="adkAgentMcpServerId"/></out-parameters>
+        <actions>
+            <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner" out-map="context"/>
+            <!-- both agent and server must belong to the caller's company -->
+            <entity-find-one entity-name="moqui.adk.AdkAgentConfig" value-field="cfg"
+                auto-field-map="[adkAgentConfigId: configId]"/>
+            <entity-find-one entity-name="moqui.adk.AdkMcpServer" value-field="srv"
+                auto-field-map="[adkMcpServerId: adkMcpServerId]"/>
+            <if condition="!cfg || !srv || cfg.ownerPartyId != ownerPartyId || srv.ownerPartyId != ownerPartyId">
+                <return error="true" message="Agent and MCP server must both belong to your company."/>
+            </if>
+            <service-call name="create#moqui.adk.AdkAgentMcpServer" out-map="context"
+                in-map="[ownerPartyId: ownerPartyId, configId: configId,
+                         adkMcpServerId: adkMcpServerId, sequenceNum: sequenceNum, enabled: 'Y']"/>
+            <script>org.moqui.adk.AdkManager.reloadConfig(configId)</script>
+        </actions>
+    </service>
+
+    <service verb="delete" noun="AdkAgentMcpServer">
+        <in-parameters><parameter name="adkAgentMcpServerId" required="true"/></in-parameters>
+        <actions>
+            <service-call name="growerp.100.GeneralServices100.get#RelatedCompanyAndOwner" out-map="context"/>
+            <entity-find-one entity-name="moqui.adk.AdkAgentMcpServer" value-field="lnk"
+                auto-field-map="[adkAgentMcpServerId: adkAgentMcpServerId]"/>
+            <if condition="lnk &amp;&amp; lnk.ownerPartyId == ownerPartyId">
+                <set field="cfgId" from="lnk.configId"/>
+                <entity-delete value-field="lnk"/>
+                <script>org.moqui.adk.AdkManager.reloadConfig(cfgId as String)</script>
+            </if>
+        </actions>
+    </service>
+
     <service verb="get" noun="AdkJob">
         <in-parameters><parameter name="search"/></in-parameters>
         <out-parameters>
