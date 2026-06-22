@@ -60,6 +60,7 @@
             <parameter name="serviceAllowlist"/>
             <parameter name="writePolicy"/>
             <parameter name="approvalChatRoomId"/>
+            <parameter name="websiteChat" type="Boolean" default="false"/>
             <parameter name="agentRole"/>
             <parameter name="orchestrationType"/>
             <parameter name="loopMaxIterations" type="Integer"/>
@@ -80,6 +81,7 @@
                           scheduleChatRoomId: scheduleChatRoomId,
                           toolMode: toolMode, serviceAllowlist: serviceAllowlist,
                           writePolicy: writePolicy, approvalChatRoomId: approvalChatRoomId,
+                          websiteChat: websiteChat ? 'Y' : 'N',
                           agentRole: agentRole, orchestrationType: orchestrationType,
                           loopMaxIterations: loopMaxIterations]"/>
             <entity-find-one entity-name="moqui.adk.AdkAgentConfig" value-field="cfg"
@@ -101,6 +103,7 @@
                 writePolicy       : cfg.writePolicy ?: 'approve',
                 approvalChatRoomId: cfg.approvalChatRoomId,
                 agentPartyId      : cfg.agentPartyId,
+                websiteChat       : cfg.websiteChat == 'Y',
                 agentRole         : cfg.agentRole ?: 'specialist',
                 orchestrationType : cfg.orchestrationType,
                 loopMaxIterations : cfg.loopMaxIterations,
@@ -125,6 +128,7 @@
             <parameter name="serviceAllowlist"/>
             <parameter name="writePolicy"/>
             <parameter name="approvalChatRoomId"/>
+            <parameter name="websiteChat" type="Boolean" default="false"/>
             <parameter name="agentRole"/>
             <parameter name="orchestrationType"/>
             <parameter name="loopMaxIterations" type="Integer"/>
@@ -151,6 +155,7 @@
                           scheduleChatRoomId: scheduleChatRoomId,
                           toolMode: toolMode, serviceAllowlist: serviceAllowlist,
                           writePolicy: writePolicy, approvalChatRoomId: approvalChatRoomId,
+                          websiteChat: websiteChat ? 'Y' : 'N',
                           agentRole: agentRole, orchestrationType: orchestrationType,
                           loopMaxIterations: loopMaxIterations]"/>
             <entity-find-one entity-name="moqui.adk.AdkAgentConfig" value-field="cfg"
@@ -172,6 +177,7 @@
                 writePolicy       : cfg.writePolicy ?: 'approve',
                 approvalChatRoomId: cfg.approvalChatRoomId,
                 agentPartyId      : cfg.agentPartyId,
+                websiteChat       : cfg.websiteChat == 'Y',
                 agentRole         : cfg.agentRole ?: 'specialist',
                 orchestrationType : cfg.orchestrationType,
                 loopMaxIterations : cfg.loopMaxIterations,

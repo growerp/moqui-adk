@@ -28,6 +28,8 @@
         <field name="approvalChatRoomId" type="id"/>
         <!-- party the agent acts as (audit attribution); default AGENT_<ownerPartyId> -->
         <field name="agentPartyId"     type="id"/>
+        <!-- websiteChat: Y → this agent answers the tenant's public website chat -->
+        <field name="websiteChat"      type="text-indicator"/>
         <!-- Multi-agent orchestration (Phase 4) -->
         <!-- agentRole: specialist (default) | coordinator | workflow -->
         <field name="agentRole"          type="text-short"/>

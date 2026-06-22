@@ -688,9 +688,11 @@ CRITICAL tool-use rules — follow exactly:
         // that ADK resolves from session state. Seed state with these keys so injectSessionState
         // does not throw "Context variable not found".
         def state = new java.util.concurrent.ConcurrentHashMap<String, Object>(initialState ?: [:])
-        // {screenCatalog} appears in the instruction preamble; scheduled/one-off runs
-        // have no Flutter client, so default it to avoid "Context variable not found".
+        // {screenCatalog} and {memory} appear in the instruction preamble; scheduled/one-off
+        // runs have no Flutter client or prior conversation history, so default them to avoid
+        // "Context variable not found".
         state.putIfAbsent('screenCatalog', '[]')
+        state.putIfAbsent('memory', '')
 
         def inMemSvc = new InMemorySessionService()
         def session  = inMemSvc.createSession(APP_NAME, userId, state, null).blockingGet()
@@ -988,6 +990,9 @@ CRITICAL tool-use rules — follow exactly:
     private static List assembleFunctionTools(boolean allowWrites) {
         List allTools = new ArrayList()
         allTools.addAll(com.google.adk.tools.FunctionTool.create(HelloTimeAgent.class, 'getCurrentTime'))
+        // Website-chat human handoff: safe (routes a conversation, no business-data write), so the
+        // read-only Support agent can call it. Reads the active room from session state.
+        allTools.addAll(com.google.adk.tools.FunctionTool.create(HandoffTool.class, 'requestHumanHandoff'))
         allTools.addAll(com.google.adk.tools.FunctionTool.create(EmailTool.class, 'readEmails'))
         allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'getLatestTestRun'))
         allTools.addAll(com.google.adk.tools.FunctionTool.create(GithubTool.class, 'getTestExceptions'))

@@ -25,6 +25,8 @@
             <parameter name="writePolicy"/>
             <parameter name="approvalChatRoomId"/>
             <parameter name="agentPartyId"/>
+            <!-- websiteChat: Y → this agent answers the tenant's public website chat -->
+            <parameter name="websiteChat"/>
             <!-- Phase 4 orchestration -->
             <parameter name="agentRole"/>
             <parameter name="orchestrationType"/>
@@ -68,6 +70,7 @@
                 <if condition="writePolicy != null"><set field="existing.writePolicy" from="writePolicy"/></if>
                 <if condition="approvalChatRoomId != null"><set field="existing.approvalChatRoomId" from="approvalChatRoomId"/></if>
                 <if condition="agentPartyId != null"><set field="existing.agentPartyId" from="agentPartyId"/></if>
+                <if condition="websiteChat != null"><set field="existing.websiteChat" from="websiteChat"/></if>
                 <if condition="agentRole != null"><set field="existing.agentRole" from="agentRole"/></if>
                 <if condition="orchestrationType != null"><set field="existing.orchestrationType" from="orchestrationType"/></if>
                 <if condition="loopMaxIterations != null"><set field="existing.loopMaxIterations" from="loopMaxIterations"/></if>
@@ -93,6 +96,7 @@
                     <set field="newCfg.writePolicy"        from="writePolicy ?: 'approve'"/>
                     <set field="newCfg.approvalChatRoomId" from="approvalChatRoomId ?: scheduleChatRoomId"/>
                     <set field="newCfg.agentPartyId"       from="agentPartyId"/>
+                    <set field="newCfg.websiteChat"        from="websiteChat ?: 'N'"/>
                     <set field="newCfg.agentRole"          from="agentRole ?: 'specialist'"/>
                     <set field="newCfg.orchestrationType"  from="orchestrationType"/>
                     <set field="newCfg.loopMaxIterations"  from="loopMaxIterations"/>
