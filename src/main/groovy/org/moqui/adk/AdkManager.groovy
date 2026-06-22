@@ -44,6 +44,19 @@ class AdkManager {
     static final String APP_NAME = 'moqui-adk'
     static final String DEFAULT_CONFIG = '__default__'
 
+    /** Sanitize an agent name so it is valid as a Gemini function name.
+     *  Gemini requires: starts with letter or underscore, alphanumeric + _ . : - only, max 128 chars. */
+    private static String sanitizeAgentName(String raw) {
+        if (!raw) return 'agent'
+        // Replace any character that is NOT [a-zA-Z0-9_.:- ] with underscore, then spaces too
+        String s = raw.replaceAll('[^a-zA-Z0-9_.:\\-]', '_')
+        // Ensure starts with letter or underscore
+        if (s && !Character.isLetter(s.charAt(0)) && s.charAt(0) != (char)'_') s = '_' + s
+        // Truncate to 128
+        if (s.length() > 128) s = s.substring(0, 128)
+        return s ?: 'agent'
+    }
+
     // configId → Runner (one per enabled AdkAgentConfig)
     private static final Map<String, Runner>   registry         = new ConcurrentHashMap<>()
     // configId → LlmAgent — kept alongside Runner so runOneOff can build a fresh Runner
@@ -241,7 +254,7 @@ CRITICAL tool-use rules — follow exactly:
                 .build()
         } else {
             agent = LlmAgent.builder()
-                    .name(agentName)
+                    .name(sanitizeAgentName(agentName))
                     // A non-null description is REQUIRED when this agent is wrapped as an
                     // AgentTool by a coordinator (AgentTool.declaration NPEs on null), and it
                     // tells the coordinator's LLM when to delegate here.
@@ -1028,7 +1041,7 @@ CRITICAL tool-use rules — follow exactly:
         def ts = configMcpToolsets[memberConfigId]
         if (ts) tools.add(ts)
         return LlmAgent.builder()
-                .name((cfg.agentName ?: memberConfigId) as String)
+                .name(sanitizeAgentName((cfg.agentName ?: memberConfigId) as String))
                 .description((cfg.description ?: cfg.agentName ?: 'GrowERP agent') as String)
                 .instruction(CONTEXT_PREAMBLE + ((cfg.instruction ?: '') as String))
                 .model(modelArg)
@@ -1061,7 +1074,7 @@ CRITICAL tool-use rules — follow exactly:
                 logger.warn("Workflow ${configId}: no member agents could be built — leaving as a plain agent")
                 return null
             }
-            String wfName = agentName ?: (type + '_' + configId)
+            String wfName = sanitizeAgentName(agentName ?: (type + '_' + configId))
             String wfDesc = "GrowERP ${type} workflow over ${subAgents.size()} specialist(s)"
             switch (type) {
                 case 'sequential':
