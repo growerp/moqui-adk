@@ -194,4 +194,17 @@
         <index name="ADKMEM_OWNER_USER"><index-field name="ownerPartyId"/><index-field name="userId"/></index>
     </entity>
 
+    <view-entity entity-name="AdkSystemUsageView" package="moqui.adk">
+        <member-entity entity-alias="AAL" entity-name="moqui.adk.AdkActionLog"/>
+        <member-entity entity-alias="AAC" entity-name="moqui.adk.AdkAgentConfig" join-from-alias="AAL" join-optional="true">
+            <key-map field-name="configId" related="adkAgentConfigId"/>
+        </member-entity>
+        <member-entity entity-alias="LLM" entity-name="growerp.general.LlmConfig" join-from-alias="AAL" join-optional="true">
+            <key-map field-name="ownerPartyId"/>
+        </member-entity>
+        <alias-all entity-alias="AAL"/>
+        <alias name="agentApiKey" entity-alias="AAC" field="apiKey"/>
+        <alias name="llmApiKey" entity-alias="LLM" field="apiKey"/>
+    </view-entity>
+
 </entities>

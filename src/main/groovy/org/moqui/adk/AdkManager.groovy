@@ -197,40 +197,46 @@ pre-filled dialog. Order/shipment specifics still work: "enter a sales order" �
             return
         }
 
+        if (!apiKey && !System.getenv('GOOGLE_API_KEY') && !System.getenv('GEMINI_API_KEY')) {
+            logger.warn("No API key provided or found in environment. Disabling ADK agent configId='${configId}'.")
+            return
+        }
+
         if (apiKey) System.setProperty('GOOGLE_API_KEY', apiKey)
 
-        // Per-agent MCP toolset: identical to the shared one but tagged with this config's
-        // id (and owner) so the MCP governance gate / searchKnowledge can resolve the
-        // calling agent and its tenant.
-        def agentMcpToolset = buildMcpToolset(configId, ownerPartyId)
+        try {
+            // Per-agent MCP toolset: identical to the shared one but tagged with this config's
+            // id (and owner) so the MCP governance gate / searchKnowledge can resolve the
+            // calling agent and its tenant.
+            def agentMcpToolset = buildMcpToolset(configId, ownerPartyId)
 
-        String envModel = System.getenv('GEMINI_MODEL') ?: System.getProperty('GEMINI_MODEL') ?: 'gemini-2.5-flash'
-        String modelId = modelName ?: envModel
-        // google-genai reads the key from the GOOGLE_API_KEY/GEMINI_API_KEY *environment*
-        // variable (not a System property), so a key from System Setup must be passed to the
-        // Gemini model explicitly. Fall back to the model-name String (env-based) when no key.
-        def modelArg = apiKey ?
-                com.google.adk.models.Gemini.builder().modelName(modelId).apiKey(apiKey).build() :
-                modelId
-        LlmAgent agent
+            String envModel = System.getenv('GEMINI_MODEL') ?: System.getProperty('GEMINI_MODEL') ?: 'gemini-2.5-flash'
+            String modelId = modelName ?: envModel
+            // google-genai reads the key from the GOOGLE_API_KEY/GEMINI_API_KEY *environment*
+            // variable (not a System property), so a key from System Setup must be passed to the
+            // Gemini model explicitly. Fall back to the model-name String (env-based) when no key.
+            def modelArg = apiKey ?
+                    com.google.adk.models.Gemini.builder().modelName(modelId).apiKey(apiKey).build() :
+                    modelId
+            LlmAgent agent
 
-        // Read this agent's scoping so the in-process FunctionTools (Email/GitHub) honour it
-        // too — a read-only agent gets no write tools. (The MCP toolset is gated server-side
-        // by the governance service.)
-        String toolMode = lookupToolMode(configId)
-        boolean allowWrites = toolMode != 'readOnly'
+            // Read this agent's scoping so the in-process FunctionTools (Email/GitHub) honour it
+            // too — a read-only agent gets no write tools. (The MCP toolset is gated server-side
+            // by the governance service.)
+            String toolMode = lookupToolMode(configId)
+            boolean allowWrites = toolMode != 'readOnly'
 
-        // In-process FunctionTools (read-only set + writes when allowed), plus the MCP toolset.
-        List allTools = assembleFunctionTools(allowWrites)
-        if (agentMcpToolset) allTools.add(agentMcpToolset)
-        // External (tenant-registered) MCP servers attached to this agent.
-        loadExternalMcpToolsets(configId, ownerPartyId).each { allTools.add(it) }
+            // In-process FunctionTools (read-only set + writes when allowed), plus the MCP toolset.
+            List allTools = assembleFunctionTools(allowWrites)
+            if (agentMcpToolset) allTools.add(agentMcpToolset)
+            // External (tenant-registered) MCP servers attached to this agent.
+            loadExternalMcpToolsets(configId, ownerPartyId).each { allTools.add(it) }
 
-        if (!agentName) {
-            agent = LlmAgent.builder()
-                .name('growerp-agent')
-                .description('GrowERP / Moqui ERP assistant with access to Moqui MCP tools')
-                .instruction(CONTEXT_PREAMBLE + '''\
+            if (!agentName) {
+                agent = LlmAgent.builder()
+                    .name('growerp-agent')
+                    .description('GrowERP / Moqui ERP assistant with access to Moqui MCP tools')
+                    .instruction(CONTEXT_PREAMBLE + '''\
 You are GrowERP Assistant, an AI agent for the GrowERP / Moqui ERP system.
 Answer the user's questions using the available Moqui MCP tools.
 
@@ -249,45 +255,48 @@ CRITICAL tool-use rules — follow exactly:
   a final, concise natural-language answer for the user (e.g. list the service names you found).
 - Make at most a few tool calls per question; if you already have an answer, just answer.
 ''')
-                .model(modelArg)
-                .tools(allTools)
-                .build()
-        } else {
-            agent = LlmAgent.builder()
-                    .name(sanitizeAgentName(agentName))
-                    // A non-null description is REQUIRED when this agent is wrapped as an
-                    // AgentTool by a coordinator (AgentTool.declaration NPEs on null), and it
-                    // tells the coordinator's LLM when to delegate here.
-                    .description(description ?: agentName ?: 'GrowERP agent')
                     .model(modelArg)
-                    .instruction(CONTEXT_PREAMBLE + (instruction ?: ''))
                     .tools(allTools)
                     .build()
+            } else {
+                agent = LlmAgent.builder()
+                        .name(sanitizeAgentName(agentName))
+                        // A non-null description is REQUIRED when this agent is wrapped as an
+                        // AgentTool by a coordinator (AgentTool.declaration NPEs on null), and it
+                        // tells the coordinator's LLM when to delegate here.
+                        .description(description ?: agentName ?: 'GrowERP agent')
+                        .model(modelArg)
+                        .instruction(CONTEXT_PREAMBLE + (instruction ?: ''))
+                        .tools(allTools)
+                        .build()
+            }
+
+            // Phase 4: a coordinator/workflow config replaces its base agent with an orchestrator
+            // that delegates to its team members (router via AgentTool — each member keeps its own
+            // McpToolset, so its scope/writePolicy/owner-pin still apply when the coordinator calls it).
+            def orch = lookupOrchestration(configId)
+            boolean isCoordinator = orch != null && (orch.role == 'coordinator' || orch.role == 'workflow')
+            if (isCoordinator) {
+                def orchestrated = buildOrchestrator(configId, ownerPartyId, agentName, modelArg, orch)
+                if (orchestrated != null) agent = orchestrated
+            }
+
+            Runner runner = Runner.builder()
+                    .agent(agent)
+                    .appName(APP_NAME)
+                    .sessionService(sharedSessionService ?: new InMemorySessionService())
+                    .build()
+
+            registry[configId]      = runner
+            agentRegistry[configId] = agent
+            // A general (unnamed) interactive agent OR a coordinator claims the tenant's chat route;
+            // plain named/scheduled specialists (e.g. CI Monitor) must not hijack interactive chat.
+            if (ownerPartyId && (!agentName || isCoordinator)) tenantRegistry[ownerPartyId] = configId
+            currentConfig = [agentName: agent.name(), modelName: modelName, configId: configId]
+            logger.info("ADK agent '${agent.name()}' registered as configId='${configId}' (tenant='${ownerPartyId ?: 'global'}')")
+        } catch (Throwable t) {
+            logger.warn("Failed to initialize ADK agent configId='${configId}': ${t.message}", t)
         }
-
-        // Phase 4: a coordinator/workflow config replaces its base agent with an orchestrator
-        // that delegates to its team members (router via AgentTool — each member keeps its own
-        // McpToolset, so its scope/writePolicy/owner-pin still apply when the coordinator calls it).
-        def orch = lookupOrchestration(configId)
-        boolean isCoordinator = orch != null && (orch.role == 'coordinator' || orch.role == 'workflow')
-        if (isCoordinator) {
-            def orchestrated = buildOrchestrator(configId, ownerPartyId, agentName, modelArg, orch)
-            if (orchestrated != null) agent = orchestrated
-        }
-
-        Runner runner = Runner.builder()
-                .agent(agent)
-                .appName(APP_NAME)
-                .sessionService(sharedSessionService ?: new InMemorySessionService())
-                .build()
-
-        registry[configId]      = runner
-        agentRegistry[configId] = agent
-        // A general (unnamed) interactive agent OR a coordinator claims the tenant's chat route;
-        // plain named/scheduled specialists (e.g. CI Monitor) must not hijack interactive chat.
-        if (ownerPartyId && (!agentName || isCoordinator)) tenantRegistry[ownerPartyId] = configId
-        currentConfig = [agentName: agent.name(), modelName: modelName, configId: configId]
-        logger.info("ADK agent '${agent.name()}' registered as configId='${configId}' (tenant='${ownerPartyId ?: 'global'}')")
     }
 
     /** Backward-compat: register a single global config. */
@@ -652,6 +661,60 @@ CRITICAL tool-use rules — follow exactly:
         t.start()
     }
 
+    /**
+     * Extract token counts summed across all events that carry usageMetadata.
+     * Returns [tokensIn, tokensOut, tokensTotal].
+     */
+    static long[] extractTokensFromEvents(List<Map> events) {
+        long tokensIn = 0, tokensOut = 0, total = 0
+        for (Map ev in events) {
+            def um = ev.usageMetadata
+            if (um instanceof Map) {
+                tokensIn  += (um.promptTokenCount     ?: 0) as long
+                tokensOut += (um.candidatesTokenCount ?: 0) as long
+                total     += (um.totalTokenCount       ?: 0) as long
+            }
+        }
+        if (total == 0 && (tokensIn > 0 || tokensOut > 0)) total = tokensIn + tokensOut
+        [tokensIn, tokensOut, total] as long[]
+    }
+
+    /**
+     * Record a top-level chat interaction in AdkActionLog with real token counts.
+     * Must be called after the run completes so events are available.
+     */
+    static void logChatTurn(String sessionId, String text, List<Map> events) {
+        if (!sessionId || sharedSessionService == null) return
+        String coordId = sessionOwn[sessionId] ?: lookupConfigIdFromDb(sessionId)
+        if (!coordId) return
+        long[] tokens = extractTokensFromEvents(events)
+        def ecf = sharedSessionService.ecf
+        Thread t = new Thread({
+            def ec = ecf.getExecutionContext()
+            try {
+                boolean wasDisabled = ec.artifactExecution.disableAuthz()
+                try {
+                    def coord = ec.entity.find('moqui.adk.AdkAgentConfig')
+                            .condition('adkAgentConfigId', coordId).one()
+                    if (!coord) return
+                    String owner = coord.ownerPartyId as String
+                    ec.service.sync().name('create#moqui.adk.AdkActionLog').parameters([
+                            ownerPartyId: owner, configId: coordId,
+                            adkSessionId: sessionId,
+                            serviceName: 'chat', verbClass: 'chat',
+                            decision: 'allowed', reason: 'User Chat Interaction',
+                            argsJson: "{\"text\": \"${text.take(200).replace('"', '\\"')}\"}",
+                            tokensIn: tokens[0], tokensOut: tokens[1], tokensTotal: tokens[2],
+                            actionTime: ec.user.nowTimestamp]).call()
+                } finally { if (!wasDisabled) ec.artifactExecution.enableAuthz() }
+            } catch (Exception e) {
+                logger.warn("logChatTurn(${sessionId}) failed: ${e.message}")
+            } finally { ec.destroy() }
+        }, 'adk-chat-log')
+        t.setDaemon(true)
+        t.start()
+    }
+
     static List<Map> runAgent(String userId, String sessionId, String text) {
         Content userContent = buildUserContent(text)
         List<Map> events = []
@@ -663,6 +726,7 @@ CRITICAL tool-use rules — follow exactly:
                 { Throwable t -> err[0] = t; logger.error("ADK runAgent error (session={}): {}", sessionId, t.message, t) }
             )
         if (err[0]) throw err[0]
+        logChatTurn(sessionId, text, events)
         logDelegations(sessionId, delegateNames)
         maybeSummarize(sessionId)
         events
@@ -734,11 +798,22 @@ CRITICAL tool-use rules — follow exactly:
                             Closure eventCallback, Closure doneCallback) {
         Content userContent = buildUserContent(text)
         Set<String> delegateNames = java.util.concurrent.ConcurrentHashMap.newKeySet()
+        List<Map> collectedEvents = Collections.synchronizedList(new ArrayList<>())
         runnerForSession(sessionId).runAsync(userId, sessionId, userContent, defaultRunConfig())
             .subscribe(
-                { Event e -> collectDelegateNames(e, delegateNames); eventCallback(eventToMap(e)) },
+                { Event e ->
+                    def em = eventToMap(e)
+                    collectDelegateNames(e, delegateNames)
+                    collectedEvents.add(em)
+                    eventCallback(em)
+                },
                 { Throwable t -> doneCallback(t) },
-                { logDelegations(sessionId, delegateNames); maybeSummarize(sessionId); doneCallback(null) }
+                {
+                    logChatTurn(sessionId, text, collectedEvents)
+                    logDelegations(sessionId, delegateNames)
+                    maybeSummarize(sessionId)
+                    doneCallback(null)
+                }
             )
     }
 
@@ -804,6 +879,20 @@ CRITICAL tool-use rules — follow exactly:
 
         Optional<Boolean> partialOpt = e.partial()
         if (partialOpt.isPresent()) m.partial = partialOpt.get()
+
+        // Capture token usage metadata when present
+        try {
+            def umOpt = e.usageMetadata()
+            if (umOpt?.isPresent()) {
+                def um = umOpt.get()
+                m.usageMetadata = [
+                    promptTokenCount    : um.promptTokenCount()?.orElse(null),
+                    candidatesTokenCount: um.candidatesTokenCount()?.orElse(null),
+                    totalTokenCount     : um.totalTokenCount()?.orElse(null),
+                ]
+            }
+        } catch (Exception ignore) {}
+
         m
     }
 
@@ -824,9 +913,53 @@ CRITICAL tool-use rules — follow exactly:
         // Tenant owner — lets searchKnowledge resolve the company even for the general
         // per-tenant interactive agent (whose configId is not an AdkAgentConfig row).
         if (ownerPartyId) sseHeaders['adk_owner_party_id'] = ownerPartyId
-        String mcpInternalPort = System.getenv('webapp_http_port') ?: '8080'
+        // Check system properties ('port' is commonly used by Moqui runner like -Dport=8081)
+        String mcpInternalPort = System.getProperty('webapp_http_port') ?: System.getProperty('port') ?: System.getenv('webapp_http_port')
+        String mcpInternalHost = System.getProperty('webapp_http_host') ?: System.getenv('webapp_http_host')
+        
+        // Moqui executable (moqui.war) parses port=8081 but doesn't set it in System properties.
+        // We can extract it from the command line arguments.
+        String sunJavaCommand = System.getProperty("sun.java.command")
+        if (!mcpInternalPort && sunJavaCommand != null) {
+            java.util.regex.Matcher match = sunJavaCommand =~ /(?:^|\s)port=(\d+)/
+            if (match.find()) {
+                mcpInternalPort = match.group(1)
+            }
+        }
+
+        if ((!mcpInternalPort || !mcpInternalHost) && sharedSessionService != null && sharedSessionService.ecf instanceof org.moqui.impl.context.ExecutionContextFactoryImpl) {
+            try {
+                // Read from actual parsed XML config
+                def confRoot = sharedSessionService.ecf.getConfXmlRoot()
+                def webroot = confRoot.first("webapp-list")?.children("webapp")?.find { it.attribute("name") == "webroot" }
+                if (webroot != null) {
+                    if (!mcpInternalPort && webroot.attribute("http-port")) {
+                        String parsedPort = webroot.attribute("http-port")
+                        if (!parsedPort.startsWith("\$")) {
+                            mcpInternalPort = parsedPort
+                        } else if (parsedPort == "\${webapp_http_port:-8080}") {
+                            mcpInternalPort = '8080' // default fallback if unexpanded
+                        }
+                    }
+                    if (!mcpInternalHost && webroot.attribute("http-host")) {
+                        String parsedHost = webroot.attribute("http-host")
+                        if (!parsedHost.startsWith("\$")) {
+                            mcpInternalHost = parsedHost
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                logger.warn("Could not read webapp http config from configuration", e)
+            }
+        }
+        mcpInternalPort = mcpInternalPort ?: '8080'
+        mcpInternalHost = mcpInternalHost ?: '127.0.0.1'
+        if (mcpInternalHost == '0.0.0.0' || mcpInternalHost == '::') mcpInternalHost = '127.0.0.1'
+
+        String sseUrl = "http://${mcpInternalHost}:${mcpInternalPort}/mcp/sse"
+        logger.info("Initializing MCP Toolset connecting to: ${sseUrl}")
         def sseParams = com.google.adk.tools.mcp.SseServerParameters.builder()
-                .url("http://localhost:${mcpInternalPort}/mcp/sse")
+                .url(sseUrl)
                 .headers(sseHeaders)
                 .build()
         def prior = configMcpToolsets[configId]
@@ -1134,13 +1267,28 @@ use your own Moqui tools. Keep delegation minimal: pick the best-matching specia
                 .build()
     }
 
+    /** Set to true during destroy() so retry loops and error handlers can bail fast. */
+    static volatile boolean shuttingDown = false
+
     static void destroy() {
+        shuttingDown = true
+        // Close all per-config toolsets first — this signals the SSE clients to stop
+        // retrying before the HTTP port goes away, suppressing ConnectException floods.
         configMcpToolsets.values().each { ts ->
-            try { ts?.close() } catch (Exception e) { logger.warn("Error closing per-config McpToolset: ${e.message}") }
+            try { ts?.close() } catch (Exception e) {
+                if (e.message?.contains('ConnectException') || e.cause instanceof java.net.ConnectException)
+                    logger.warn("McpToolset closed during shutdown (expected): ${e.message}")
+                else
+                    logger.warn("Error closing per-config McpToolset: ${e.message}")
+            }
         }
         configMcpToolsets.clear()
         configExternalToolsets.values().each { list ->
-            list?.each { ts -> try { ts?.close() } catch (Exception e) { logger.warn("Error closing external McpToolset: ${e.message}") } }
+            list?.each { ts ->
+                try { ts?.close() } catch (Exception e) {
+                    logger.warn("Error closing external McpToolset: ${e.message}")
+                }
+            }
         }
         configExternalToolsets.clear()
         if (mcpToolset != null) {
@@ -1148,7 +1296,7 @@ use your own Moqui tools. Keep delegation minimal: pick the best-matching specia
                 logger.info('Closing ADK McpToolset...')
                 mcpToolset.close()
             } catch (Exception e) {
-                logger.warn("Error closing McpToolset: ${e.message}", e)
+                logger.warn("McpToolset close during shutdown: ${e.message}")
             }
             mcpToolset = null
         }

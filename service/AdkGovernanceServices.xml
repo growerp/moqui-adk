@@ -109,6 +109,43 @@
                             message  = "'${serviceName}' is not in this agent's allowed-service list."
                         }
                     }
+                    if (decision == 'allowed') {
+                        def hasCustomLlm = false
+                        if (cfg?.apiKey) hasCustomLlm = true
+                        if (!hasCustomLlm && ownerPartyId) {
+                            def lc = ec.entity.find('growerp.general.LlmConfig')
+                                .condition('ownerPartyId', ownerPartyId)
+                                .condition('llmProvider', 'gemini').one()
+                            if (lc?.apiKey) hasCustomLlm = true
+                        }
+                        if (!hasCustomLlm && ownerPartyId) {
+                            def ss = ec.entity.find('growerp.general.SystemSettings').condition('ownerPartyId', ownerPartyId).one()
+                            if (ss?.llmSystemTokenLimit != null && ss.llmSystemTokenLimit > 0) {
+                                def cal = Calendar.getInstance()
+                                cal.set(Calendar.DAY_OF_MONTH, 1)
+                                cal.set(Calendar.HOUR_OF_DAY, 0)
+                                cal.set(Calendar.MINUTE, 0)
+                                cal.set(Calendar.SECOND, 0)
+                                def startOfMonth = new java.sql.Timestamp(cal.getTimeInMillis())
+                                
+                                def iter = ec.entity.find('moqui.adk.AdkActionLog')
+                                    .condition('ownerPartyId', ownerPartyId)
+                                    .condition('actionTime', org.moqui.entity.EntityCondition.GREATER_THAN_EQUAL_TO, startOfMonth)
+                                    .selectField('tokensTotal').iterator()
+                                long totalUsed = 0
+                                while (iter.hasNext()) {
+                                    def r = iter.next()
+                                    totalUsed += (r.tokensTotal ?: 0)
+                                }
+                                iter.close()
+                                
+                                if (totalUsed >= ss.llmSystemTokenLimit) {
+                                    decision = 'blocked'
+                                    message = "System LLM token limit exceeded for this month (${totalUsed} >= ${ss.llmSystemTokenLimit}). Please add your own API Key."
+                                }
+                            }
+                        }
+                    }
                     if (decision == 'allowed' && verbClass == 'write') {
                         if (writePolicy == 'block') {
                             decision = 'blocked'
@@ -127,7 +164,8 @@
                 in-map="[ownerPartyId: ownerPartyId, configId: configId, parentConfigId: parentConfigId,
                          adkSessionId: adkSessionId, agentPartyId: agentPartyId, toolName: toolName,
                          serviceName: serviceName, argsJson: argsJson, verbClass: verbClass,
-                         decision: decision, reason: message, actionTime: ec.user.nowTimestamp]"/>
+                         decision: decision, reason: message, actionTime: ec.user.nowTimestamp,
+                         tokensIn: 0, tokensOut: 0, tokensTotal: 0]"/>
             <set field="adkActionLogId" from="logOut.adkActionLogId"/>
 
             <!-- Pending → create approval + post an approval card to the agent's chat room -->

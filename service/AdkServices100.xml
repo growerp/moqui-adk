@@ -613,14 +613,103 @@
             </entity-find>
             <set field="adkActions" from="[]"/>
             <iterate list="rows" entry="r">
-                <script>adkActions.add([
-                    adkActionLogId: r.adkActionLogId, configId: r.configId,
-                    agentPartyId: r.agentPartyId, toolName: r.toolName, serviceName: r.serviceName,
-                    argsJson: r.argsJson, verbClass: r.verbClass, decision: r.decision,
-                    reason: r.reason, resultSummary: r.resultSummary,
-                    tokensIn: r.tokensIn, tokensOut: r.tokensOut, tokensTotal: r.tokensTotal,
-                    actionTime: r.actionTime ])</script>
+                <script>
+                    def svc = r.serviceName as String
+                    if (svc) {
+                        if (svc.contains('#')) {
+                            int hashIdx = svc.indexOf('#')
+                            def partBefore = svc.substring(0, hashIdx)
+                            def noun = svc.substring(hashIdx + 1)
+                            def verb = partBefore
+                            if (verb.contains('.')) {
+                                verb = verb.substring(verb.lastIndexOf('.') + 1)
+                            }
+                            svc = "${verb}#${noun}"
+                        } else if (svc.contains('.')) {
+                            svc = svc.substring(svc.lastIndexOf('.') + 1)
+                        }
+                    }
+                    adkActions.add([
+                        adkActionLogId: r.adkActionLogId, configId: r.configId,
+                        agentPartyId: r.agentPartyId, toolName: r.toolName, serviceName: svc,
+                        argsJson: r.argsJson, verbClass: r.verbClass, decision: r.decision,
+                        reason: r.reason, resultSummary: r.resultSummary,
+                        tokensIn: r.tokensIn, tokensOut: r.tokensOut, tokensTotal: r.tokensTotal,
+                        actionTime: r.actionTime ])
+                </script>
             </iterate>
+        </actions>
+    </service>
+
+    <!-- GET /adk/system-usage — recent agent action-log rows across all tenants that use the system LLM -->
+    <service verb="get" noun="AdkSystemUsage">
+        <in-parameters>
+            <parameter name="search"/>
+            <parameter name="limit" type="Integer" default="100"/>
+        </in-parameters>
+        <out-parameters><parameter name="adkActions" type="List"/></out-parameters>
+        <actions>
+            <entity-find entity-name="moqui.adk.AdkSystemUsageView" list="rows">
+                <econdition field-name="agentApiKey" operator="is-null"/>
+                <econdition field-name="llmApiKey" operator="is-null"/>
+                <econditions combine="or">
+                    <econdition field-name="serviceName" operator="like" ignore-case="true"
+                        from="search ? ('%' + search + '%') : null" ignore-if-empty="true"/>
+                    <econdition field-name="toolName" operator="like" ignore-case="true"
+                        from="search ? ('%' + search + '%') : null" ignore-if-empty="true"/>
+                    <econdition field-name="reason" operator="like" ignore-case="true"
+                        from="search ? ('%' + search + '%') : null" ignore-if-empty="true"/>
+                </econditions>
+                <order-by field-name="-actionTime"/>
+                <limit>${limit}</limit>
+            </entity-find>
+            <set field="adkActions" from="[]"/>
+            <script><![CDATA[
+                // Cache ownerPartyId → company name to avoid N+1 lookups
+                def nameCache = [:]
+                for (def r in rows) {
+                    def ownerId = r.ownerPartyId as String
+                    if (ownerId && !nameCache.containsKey(ownerId)) {
+                        // OwnerCompany: ownerPartyId alias = PTYOWNER.partyId,
+                        // 'name' alias = COMPANY.organizationName, role must be OrgInternal
+                        def compList = ec.entity.find('growerp.party.OwnerCompany')
+                                .condition('ownerPartyId', ownerId)
+                                .condition('role', 'OrgInternal')
+                                .selectField('name').list()
+                        nameCache[ownerId] = compList ? (compList[0].name ?: ownerId) : ownerId
+                    }
+
+                    // Shorten service name to verb#noun (strip package path)
+                    // e.g. "growerp.100.FinDocServices100.get#FinDoc" → "get#FinDoc"
+                    //      "growerp.100.SomeServices.myTool"          → "myTool"
+                    def svc = r.serviceName as String
+                    if (svc) {
+                        if (svc.contains('#')) {
+                            int hashIdx = svc.indexOf('#')
+                            def partBefore = svc.substring(0, hashIdx)
+                            def noun = svc.substring(hashIdx + 1)
+                            def verb = partBefore
+                            if (verb.contains('.')) {
+                                verb = verb.substring(verb.lastIndexOf('.') + 1)
+                            }
+                            svc = "${verb}#${noun}"
+                        } else if (svc.contains('.')) {
+                            svc = svc.substring(svc.lastIndexOf('.') + 1)
+                        }
+                    }
+
+                    adkActions.add([
+                        adkActionLogId: r.adkActionLogId, configId: r.configId,
+                        ownerPartyId: ownerId,
+                        tenantName: ownerId ? nameCache[ownerId] : null,
+                        agentPartyId: r.agentPartyId, toolName: r.toolName,
+                        serviceName: svc,
+                        argsJson: r.argsJson, verbClass: r.verbClass, decision: r.decision,
+                        reason: r.reason, resultSummary: r.resultSummary,
+                        tokensIn: r.tokensIn, tokensOut: r.tokensOut, tokensTotal: r.tokensTotal,
+                        actionTime: r.actionTime ])
+                }
+            ]]></script>
         </actions>
     </service>
 
@@ -642,12 +731,29 @@
             </entity-find>
             <set field="adkApprovals" from="[]"/>
             <iterate list="rows" entry="r">
-                <script>adkApprovals.add([
-                    adkApprovalId: r.adkApprovalId, adkActionLogId: r.adkActionLogId,
-                    configId: r.configId, serviceName: r.serviceName, argsJson: r.argsJson,
-                    status: r.status, requestedByUserId: r.requestedByUserId,
-                    decidedByUserId: r.decidedByUserId, requestTime: r.requestTime,
-                    decisionTime: r.decisionTime ])</script>
+                <script>
+                    def svc = r.serviceName as String
+                    if (svc) {
+                        if (svc.contains('#')) {
+                            int hashIdx = svc.indexOf('#')
+                            def partBefore = svc.substring(0, hashIdx)
+                            def noun = svc.substring(hashIdx + 1)
+                            def verb = partBefore
+                            if (verb.contains('.')) {
+                                verb = verb.substring(verb.lastIndexOf('.') + 1)
+                            }
+                            svc = "${verb}#${noun}"
+                        } else if (svc.contains('.')) {
+                            svc = svc.substring(svc.lastIndexOf('.') + 1)
+                        }
+                    }
+                    adkApprovals.add([
+                        adkApprovalId: r.adkApprovalId, adkActionLogId: r.adkActionLogId,
+                        configId: r.configId, serviceName: svc, argsJson: r.argsJson,
+                        status: r.status, requestedByUserId: r.requestedByUserId,
+                        decidedByUserId: r.decidedByUserId, requestTime: r.requestTime,
+                        decisionTime: r.decisionTime ])
+                </script>
             </iterate>
         </actions>
     </service>
