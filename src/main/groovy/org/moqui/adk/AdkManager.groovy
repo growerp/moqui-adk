@@ -590,7 +590,7 @@ CRITICAL tool-use rules — follow exactly:
 
     // ── Agent execution ───────────────────────────────────────────────────────
 
-    static RunConfig defaultRunConfig() { RunConfig.builder().setMaxLlmCalls(12).build() }
+    static RunConfig defaultRunConfig() { RunConfig.builder().setMaxLlmCalls(30).build() }
 
     /**
      * After a completed interactive turn, fold the session into the rolling per-(owner,user)
