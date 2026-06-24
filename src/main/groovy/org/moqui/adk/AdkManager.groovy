@@ -81,6 +81,11 @@ class AdkManager {
 
     private static volatile MoquiSessionService sharedSessionService
     private static volatile com.google.adk.tools.mcp.McpToolset mcpToolset
+    // Set true at process exit (JVM shutdown hook / destroy). Guards tool-loading so an
+    // in-flight google-adk McpToolset SSE connect isn't retried while the server tears down.
+    private static volatile boolean shuttingDown = false
+    private static final java.util.concurrent.atomic.AtomicBoolean shutdownHookRegistered =
+            new java.util.concurrent.atomic.AtomicBoolean(false)
     // configId → per-agent McpToolset. Each carries an `adk_config_id` header so the
     // MCP governance gate can identify the calling agent and enforce its tenant/scope.
     private static final Map<String, com.google.adk.tools.mcp.McpToolset> configMcpToolsets = new ConcurrentHashMap<>()
@@ -343,6 +348,14 @@ CRITICAL tool-use rules — follow exactly:
      */
     static void lazyInit(ExecutionContextFactory ecf) {
         initSessionService(ecf)
+        // Close toolsets at the very start of JVM exit — before Moqui drains its worker pool —
+        // so a pending McpToolset SSE connect is disposed (fails fast) instead of retry+timeout.
+        if (shutdownHookRegistered.compareAndSet(false, true)) {
+            Runtime.runtime.addShutdownHook(new Thread({
+                shuttingDown = true
+                closeAllToolsets()
+            }, 'adk-shutdown'))
+        }
         if (!registry.isEmpty()) return
 
         def cfgList = null
@@ -716,6 +729,7 @@ CRITICAL tool-use rules — follow exactly:
     }
 
     static List<Map> runAgent(String userId, String sessionId, String text) {
+        if (shuttingDown) return []
         Content userContent = buildUserContent(text)
         List<Map> events = []
         Set<String> delegateNames = new HashSet<>()
@@ -757,6 +771,7 @@ CRITICAL tool-use rules — follow exactly:
      */
     static List<Map> runOneOff(String configId, String userId, String text,
                                Map<String, Object> initialState = [:]) {
+        if (shuttingDown) return []
         String cid = configId ?: DEFAULT_CONFIG
         LlmAgent agent = agentRegistry[cid] ?: agentRegistry.values().first()
         if (!agent) throw new IllegalStateException('ADK not initialized — add API key in ADK → Configuration')
@@ -796,6 +811,7 @@ CRITICAL tool-use rules — follow exactly:
 
     static void runAgentSse(String userId, String sessionId, String text,
                             Closure eventCallback, Closure doneCallback) {
+        if (shuttingDown) { doneCallback(null); return }
         Content userContent = buildUserContent(text)
         Set<String> delegateNames = java.util.concurrent.ConcurrentHashMap.newKeySet()
         List<Map> collectedEvents = Collections.synchronizedList(new ArrayList<>())
@@ -900,6 +916,7 @@ CRITICAL tool-use rules — follow exactly:
      *  tenant `adk_owner_party_id`) so the governance gate / searchKnowledge on the MCP
      *  server can resolve the calling agent and its tenant. */
     private static com.google.adk.tools.mcp.McpToolset buildMcpToolset(String configId, String ownerPartyId = null) {
+        if (shuttingDown) return null
         if (mcpApiKey == null && sharedSessionService != null) {
             mcpApiKey = generateMcpApiKey(sharedSessionService.ecf)
         }
@@ -996,6 +1013,7 @@ CRITICAL tool-use rules — follow exactly:
      *  configId are closed first so reloadConfig doesn't leak SSE connections. */
     private static List<com.google.adk.tools.mcp.McpToolset> loadExternalMcpToolsets(String configId, String ownerPartyId) {
         List<com.google.adk.tools.mcp.McpToolset> out = []
+        if (shuttingDown) return out
         if (!configId || configId == DEFAULT_CONFIG || sharedSessionService == null) return out
         def prior = configExternalToolsets.remove(configId)
         if (prior) prior.each { try { it?.close() } catch (Exception ignore) {} }
@@ -1267,11 +1285,9 @@ use your own Moqui tools. Keep delegation minimal: pick the best-matching specia
                 .build()
     }
 
-    /** Set to true during destroy() so retry loops and error handlers can bail fast. */
-    static volatile boolean shuttingDown = false
-
-    static void destroy() {
-        shuttingDown = true
+    /** Close every McpToolset (per-config, external, default). Idempotent: a re-close is a
+     *  no-op. Shared by destroy() and the JVM shutdown hook. */
+    static void closeAllToolsets() {
         // Close all per-config toolsets first — this signals the SSE clients to stop
         // retrying before the HTTP port goes away, suppressing ConnectException floods.
         configMcpToolsets.values().each { ts ->
@@ -1300,6 +1316,11 @@ use your own Moqui tools. Keep delegation minimal: pick the best-matching specia
             }
             mcpToolset = null
         }
+    }
+
+    static void destroy() {
+        shuttingDown = true
+        closeAllToolsets()
         registry.clear()
         agentRegistry.clear()
         tenantRegistry.clear()
