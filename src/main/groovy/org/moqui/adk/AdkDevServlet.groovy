@@ -131,7 +131,16 @@ class AdkDevServlet extends HttpServlet {
                 } catch (Exception ignored) {}
                 Map<String, Object> initialState = buildContext(req, resp)
                 initialState.putAll(clientState)
-                json(resp, AdkManager.createSession(userId, initialState))
+                try {
+                    json(resp, AdkManager.createSession(userId, initialState))
+                } catch (IllegalStateException e) {
+                    // Expected when no LLM key is configured — return a clean 503 + JSON
+                    // (the chat UI matches the message to prompt for System Setup) instead
+                    // of letting it bubble to Jetty as a 500 with a stack trace.
+                    logger.warn("ADK session not created: ${e.message}")
+                    resp.status = 503
+                    json(resp, [error: e.message])
+                }
                 break
             case 'GET':
 

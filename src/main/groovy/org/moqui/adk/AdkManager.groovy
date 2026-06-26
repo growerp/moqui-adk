@@ -557,8 +557,8 @@ CRITICAL tool-use rules — follow exactly:
         // agent like the CI Monitor) so it carries the tenant owner for searchKnowledge.
         if (tenantId && tenantId != 'DEFAULT') ensureInteractiveForTenant(tenantId)
         String configId = resolveConfigId(tenantId)
-        Runner runner   = registry[configId] ?: registry.values().first()
-        if (!runner) throw new IllegalStateException('ADK not initialized — add API key in ADK → Configuration')
+        Runner runner   = registry[configId] ?: registry.values().find()
+        if (!runner) throw new IllegalStateException('ADK not initialized — add an LLM API key in System Setup')
 
         def session = runner.sessionService()
                 .createSession(APP_NAME, userId, initialState ?: [:], null)
@@ -594,7 +594,7 @@ CRITICAL tool-use rules — follow exactly:
 
     static List<Map> listSessions(String userId) {
         // Use first available runner (sessions are shared via MoquiSessionService)
-        def runner = registry.values().first()
+        def runner = registry.values().find()
         def response = runner?.sessionService()?.listSessions(APP_NAME, userId)?.blockingGet()
         response?.sessions()?.collect { s -> [id: s.id(), appName: APP_NAME, userId: s.userId()] } ?: []
     }
@@ -843,13 +843,13 @@ CRITICAL tool-use rules — follow exactly:
     private static String resolveConfigId(String ownerPartyId) {
         if (ownerPartyId && tenantRegistry[ownerPartyId]) return tenantRegistry[ownerPartyId]
         // Fall back to the only/default registered config
-        return registry.containsKey(DEFAULT_CONFIG) ? DEFAULT_CONFIG : (registry.keySet().first() ?: DEFAULT_CONFIG)
+        return registry.containsKey(DEFAULT_CONFIG) ? DEFAULT_CONFIG : (registry.keySet().find() ?: DEFAULT_CONFIG)
     }
 
     private static Runner runnerForSession(String sessionId) {
         String configId = sessionOwn[sessionId] ?: lookupConfigIdFromDb(sessionId) ?: DEFAULT_CONFIG
         if (configId && configId != DEFAULT_CONFIG) sessionOwn[sessionId] = configId  // cache it
-        return registry[configId] ?: registry.values().first() ?: { throw new IllegalStateException('ADK not initialized') }()
+        return registry[configId] ?: registry.values().find() ?: { throw new IllegalStateException('ADK not initialized — add an LLM API key in System Setup') }()
     }
 
     private static String lookupConfigIdFromDb(String sessionId) {
