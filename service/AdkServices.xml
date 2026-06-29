@@ -111,37 +111,9 @@
                 <field-map field-name="adkAgentConfigId"/>
             </entity-find-one>
 
-            <!-- Sync per-agent ServiceJob: create/update when scheduleEnabled=Y, pause otherwise -->
-            <set field="jobName" value="adk_scheduled_${adkAgentConfigId}"/>
-            <entity-find-one entity-name="moqui.service.job.ServiceJob" value-field="existingJob"
-                for-update="true" auto-field-map="[jobName: jobName]"/>
-            <if condition="savedCfg.scheduleEnabled == 'Y' &amp;&amp; savedCfg.scheduleExpression">
-                <if condition="existingJob">
-                    <set field="existingJob.cronExpression" from="savedCfg.scheduleExpression"/>
-                    <set field="existingJob.paused" value="N"/>
-                    <entity-update value-field="existingJob"/>
-                    <else>
-                        <entity-make-value entity-name="moqui.service.job.ServiceJob" value-field="newJob"/>
-                        <set field="newJob.jobName"         from="jobName"/>
-                        <set field="newJob.description"     value="ADK Agent: ${savedCfg.agentName ?: ''}"/>
-                        <set field="newJob.serviceName"     value="AdkSchedulerServices.run#ScheduledAgent"/>
-                        <set field="newJob.cronExpression"  from="savedCfg.scheduleExpression"/>
-                        <set field="newJob.paused"          value="N"/>
-                        <entity-create value-field="newJob"/>
-                        <entity-make-value entity-name="moqui.service.job.ServiceJobParameter" value-field="jobParam"/>
-                        <set field="jobParam.jobName"        from="jobName"/>
-                        <set field="jobParam.parameterName"  value="adkAgentConfigId"/>
-                        <set field="jobParam.parameterValue" from="adkAgentConfigId"/>
-                        <entity-create value-field="jobParam"/>
-                    </else>
-                </if>
-                <else>
-                    <if condition="existingJob &amp;&amp; existingJob.paused != 'Y'">
-                        <set field="existingJob.paused" value="Y"/>
-                        <entity-update value-field="existingJob"/>
-                    </if>
-                </else>
-            </if>
+            <!-- Sync per-agent ServiceJob (create/update/pause based on schedule fields) -->
+            <service-call name="AdkSchedulerServices.sync#AgentJob"
+                in-map="[adkAgentConfigId: adkAgentConfigId]"/>
 
             <!-- Resolve API key: per-agent apiKey wins; else look up from LlmConfig list -->
             <set field="resolvedApiKey" from="savedCfg.apiKey ?: ''"/>

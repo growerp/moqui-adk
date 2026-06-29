@@ -2,22 +2,80 @@
 <services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
           xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
 
-    <!-- Called by ServiceJob every minute — runs agents with scheduleEnabled=Y but no per-agent ServiceJob -->
+    <!-- Sync a config's per-agent ServiceJob: create/update when scheduleEnabled=Y with a
+         scheduleExpression, pause otherwise. The per-agent job (cron = scheduleExpression) is
+         the source of truth for the schedule. Called from create#/update#AdkAgentConfig and
+         from run#AllScheduledAgents (to backfill seed/legacy configs that never went through
+         the save path). -->
+    <service verb="sync" noun="AgentJob" authenticate="anonymous">
+        <description>Create/update/pause the per-agent ServiceJob for an ADK agent config.</description>
+        <in-parameters>
+            <parameter name="adkAgentConfigId" required="true"/>
+        </in-parameters>
+        <actions>
+            <entity-find-one entity-name="moqui.adk.AdkAgentConfig" value-field="savedCfg">
+                <field-map field-name="adkAgentConfigId"/>
+            </entity-find-one>
+            <if condition="!savedCfg"><return/></if>
+
+            <set field="jobName" value="adk_scheduled_${adkAgentConfigId}"/>
+            <entity-find-one entity-name="moqui.service.job.ServiceJob" value-field="existingJob"
+                for-update="true" auto-field-map="[jobName: jobName]"/>
+            <if condition="savedCfg.scheduleEnabled == 'Y' &amp;&amp; savedCfg.scheduleExpression">
+                <if condition="existingJob">
+                    <set field="existingJob.cronExpression" from="savedCfg.scheduleExpression"/>
+                    <set field="existingJob.paused" value="N"/>
+                    <entity-update value-field="existingJob"/>
+                    <else>
+                        <entity-make-value entity-name="moqui.service.job.ServiceJob" value-field="newJob"/>
+                        <set field="newJob.jobName"         from="jobName"/>
+                        <set field="newJob.description"     value="ADK Agent: ${savedCfg.agentName ?: ''}"/>
+                        <set field="newJob.serviceName"     value="AdkSchedulerServices.run#ScheduledAgent"/>
+                        <set field="newJob.cronExpression"  from="savedCfg.scheduleExpression"/>
+                        <set field="newJob.paused"          value="N"/>
+                        <entity-create value-field="newJob"/>
+                        <entity-make-value entity-name="moqui.service.job.ServiceJobParameter" value-field="jobParam"/>
+                        <set field="jobParam.jobName"        from="jobName"/>
+                        <set field="jobParam.parameterName"  value="adkAgentConfigId"/>
+                        <set field="jobParam.parameterValue" from="adkAgentConfigId"/>
+                        <entity-create value-field="jobParam"/>
+                    </else>
+                </if>
+                <else>
+                    <if condition="existingJob &amp;&amp; existingJob.paused != 'Y'">
+                        <set field="existingJob.paused" value="Y"/>
+                        <entity-update value-field="existingJob"/>
+                    </if>
+                </else>
+            </if>
+        </actions>
+    </service>
+
+    <!-- Called by ServiceJob every minute. Configs WITH a scheduleExpression are owned by their
+         own per-agent ServiceJob (created/backfilled via sync#AgentJob) and must NOT be run
+         here. Only legacy configs with no scheduleExpression are run inline every minute. -->
     <service verb="run" noun="AllScheduledAgents" authenticate="anonymous">
-        <description>Iterate enabled scheduled ADK agent configs that have no per-agent ServiceJob and run each one.</description>
+        <description>Backfill per-agent jobs for scheduled configs; run only legacy (expression-less) configs inline.</description>
         <actions>
             <entity-find entity-name="moqui.adk.AdkAgentConfig" list="cfgList">
                 <econdition field-name="scheduleEnabled" value="Y"/>
                 <econdition field-name="enabled"         value="Y"/>
             </entity-find>
             <iterate list="cfgList" entry="cfg">
-                <!-- Skip any agent that has its own per-agent ServiceJob; that job (and its
-                     paused flag) is the source of truth. Only run legacy configs with no job. -->
-                <entity-find-one entity-name="moqui.service.job.ServiceJob" value-field="perAgentJob"
-                    auto-field-map="[jobName: 'adk_scheduled_' + cfg.adkAgentConfigId]"/>
-                <if condition="!perAgentJob">
-                    <service-call name="AdkSchedulerServices.run#ScheduledAgent"
-                        in-map="[adkAgentConfigId: cfg.adkAgentConfigId]" async="true"/>
+                <if condition="cfg.scheduleExpression">
+                    <!-- Has a cron: ensure its per-agent job exists (the job owns the schedule);
+                         never run inline, or it would fire every minute. -->
+                    <service-call name="AdkSchedulerServices.sync#AgentJob"
+                        in-map="[adkAgentConfigId: cfg.adkAgentConfigId]"/>
+                    <else>
+                        <!-- Legacy expression-less config: run inline unless it has its own job. -->
+                        <entity-find-one entity-name="moqui.service.job.ServiceJob" value-field="perAgentJob"
+                            auto-field-map="[jobName: 'adk_scheduled_' + cfg.adkAgentConfigId]"/>
+                        <if condition="!perAgentJob">
+                            <service-call name="AdkSchedulerServices.run#ScheduledAgent"
+                                in-map="[adkAgentConfigId: cfg.adkAgentConfigId]" async="true"/>
+                        </if>
+                    </else>
                 </if>
             </iterate>
         </actions>
