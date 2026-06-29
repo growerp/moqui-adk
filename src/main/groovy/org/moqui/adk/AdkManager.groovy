@@ -530,6 +530,16 @@ CRITICAL tool-use rules — follow exactly:
     static synchronized void reloadInteractive(ExecutionContextFactory ecf) {
         registry.remove(DEFAULT_CONFIG)
         agentRegistry.remove(DEFAULT_CONFIG)
+        // Also drop per-tenant interactive runners (INTERACTIVE_<owner>) so a key
+        // change OR removal in System Setup takes effect for tenant chat. They are
+        // rebuilt on the next createSession via ensureInteractiveForTenant — which
+        // re-resolves the current key, so a deleted key correctly stops the chat.
+        def interactiveCids = registry.keySet().findAll { it.startsWith('INTERACTIVE_') }
+        for (String cid in interactiveCids) {
+            registry.remove(cid)
+            agentRegistry.remove(cid)
+            tenantRegistry.entrySet().removeIf { it.value == cid }
+        }
         currentConfig = [:]
         ensureInteractiveDefault(ecf)
     }
@@ -778,7 +788,7 @@ CRITICAL tool-use rules — follow exactly:
                                Map<String, Object> initialState = [:]) {
         if (shuttingDown) return []
         String cid = configId ?: DEFAULT_CONFIG
-        LlmAgent agent = agentRegistry[cid] ?: agentRegistry.values().first()
+        LlmAgent agent = agentRegistry[cid] ?: agentRegistry.values().find()
         if (!agent) throw new IllegalStateException('ADK not initialized — add API key in ADK → Configuration')
 
         // The agent instruction embeds CONTEXT_PREAMBLE with {userId}/{username}/... placeholders
